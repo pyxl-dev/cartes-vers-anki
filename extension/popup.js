@@ -67,12 +67,19 @@ async function refresh(){
     await api('CONNECT');
     const decks=await api('DECKS');
     const saved=await chrome.storage.local.get('deck');
+    const previous=$('deck').value;
     allDecks=decks;
-    fillDecks(decks);
-    if(decks.includes(saved.deck))$('deck').value=saved.deck;
-    invalidate(); status(`Anki connecté sur le port ${$('ankiPort').value}`
-      +(portIsManual?' (port choisi manuellement)':' (détecté automatiquement)')
-      +`. ${decks.length} paquet(s) disponible(s).`);
+    fillDecks(decks,{keepCurrent:false});
+    // Ne JAMAIS conserver un paquet qui n'existe plus (supprimé ou renommé dans
+    // Anki) : l'analyse partirait sur une destination obsolète et échouerait.
+    const wanted=[saved.deck,previous].find(v=>v&&decks.includes(v));
+    $('deck').value=wanted||decks[0]||'';
+    invalidate();
+    status(decks.length
+      ? `Anki connecté sur le port ${$('ankiPort').value}`
+        +(portIsManual?' (port choisi manuellement)':' (détecté automatiquement)')
+        +`. ${decks.length} paquet(s) disponible(s).`
+      : 'Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.');
   }catch(e){status(`Connexion impossible : ${e.message}`);}
 }
 $('deck').addEventListener('change',invalidate);

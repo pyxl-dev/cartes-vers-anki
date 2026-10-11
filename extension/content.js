@@ -209,7 +209,7 @@
     const dialog = el('section','ankibridge-dialog'); dialog.setAttribute('role','dialog'); dialog.setAttribute('aria-modal','true');
     const head = el('div','ankibridge-head');
     head.append(el('h2','',`Vérifier ${cards.length} cartes avant import`));
-    const close = el('button','ankibridge-close','×'); close.type='button'; close.setAttribute('aria-label','Fermer'); close.onclick=()=>overlay.remove();
+    const close = el('button','ankibridge-close','×'); close.type='button'; close.setAttribute('aria-label','Fermer'); close.onclick=()=>closeModal();
     head.append(close); dialog.append(head);
     const main = el('div','ankibridge-main');
     const control = el('div','ankibridge-control');
@@ -272,7 +272,18 @@
     for(const e of entries) e.check.addEventListener('change',()=>{updateCount();updateReplaceState();});
     selectNew.onclick=()=>{for(const e of entries)e.check.checked=(e.kind==='new');updateCount();updateReplaceState();};
     selectNone.onclick=()=>{for(const e of entries)e.check.checked=false;updateCount();updateReplaceState();};
+    // AnkiConnect renvoie des chemins complets « Parent::Enfant ». On n'affiche qu'un
+    // libellé lisible ; la valeur de l'option reste EXACTEMENT le nom complet.
+    const deckLabel=name=>String(name).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+    let closed=false;
+    // La fenêtre est « vivante » tant qu'elle n'a pas été fermée et qu'elle est
+    // encore attachée au document : aucune analyse ne doit se poursuivre ni
+    // s'appliquer sur un dialogue détaché.
+    const alive=()=>!closed&&!!overlay.parentElement;
     const invalidate=({resetChecks=false,why}={})=>{revision++;analysisSeq++;verified=false;lastReport=null;save.disabled=true;
+      // Une analyse en vol est abandonnée : on rend la main tout de suite, sinon
+      // le bouton resterait désactivé indéfiniment après une édition.
+      analyze.disabled=false;
       if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
       for(const e of entries){e.replaceRow.replaceChildren();e.replace=null;}
       replaceBtn.disabled=true; replaceBtn.textContent='Remplacer les notes existantes';
@@ -331,6 +342,7 @@
       e.replace=box;
     };
     const runAnalysis=async()=>{
+      if(!alive())return;
       const token=++analysisSeq;
       const atStart=revision;
       analyze.disabled=true; save.disabled=true; replaceBtn.disabled=true;
@@ -338,8 +350,8 @@
       try {
         const current=AnkiCards.toCards({cards:currentCards()});
         const report=await api('ANALYZE',{deck:picker.value,cards:current});
-        // Résultat périmé (paquet changé, cartes éditées, nouvelle analyse lancée) : on l'ignore.
-        if(token!==analysisSeq||atStart!==revision)return;
+        // Résultat périmé, ou fenêtre fermée pendant l'appel : on l'ignore.
+        if(!alive()||token!==analysisSeq||atStart!==revision)return;
         verified=true;
         lastReport=report;
         let exact=0, similar=0, replaceable=0;
@@ -372,11 +384,11 @@
           ' Les ressemblances ne prouvent pas que le fait médical est identique.';
         save.disabled=false;
       } catch(e){
-        if(token!==analysisSeq)return;
+        if(!alive()||token!==analysisSeq)return;
         verified=false;
         msg.textContent=`Comparaison impossible : ${e.message} — clique sur « Relancer la comparaison ».`;
       }
-      finally{ if(token===analysisSeq) analyze.disabled=false; }
+      finally{ if(alive()&&token===analysisSeq) analyze.disabled=false; }
     };
     analyze.onclick=runAnalysis;
     // Changer de paquet relance la comparaison automatiquement (jamais d'import
@@ -390,19 +402,24 @@
     };
     let lastAnalyzedDeck='';
     foot.append(msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
-    overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
-    const esc=(e)=>{if(e.key==='Escape'){overlay.remove();document.removeEventListener('keydown',esc);}};
+    // Fermer la fenêtre abandonne l'analyse en vol : sans cela, une comparaison
+    // lancée juste avant la fermeture continuerait de coûter des appels Anki.
+    const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);overlay.remove();};
+    overlay.addEventListener('click',e=>{if(e.target===overlay) closeModal();});
+    const esc=(e)=>{if(e.key==='Escape'){closeModal();document.removeEventListener('keydown',esc);}};
     document.addEventListener('keydown',esc);
     try {
       const names=await api('DECKS');
+      if(!alive())return;                 // fenêtre fermée pendant le chargement des paquets
       picker.setNames(names);
       const saved=await chrome.storage.local.get('deck');
+      if(!alive())return;
       if(!names.length)throw new Error('Aucun paquet Anki disponible. Crée un paquet dans Anki.');
       picker.setValue(names.includes(saved.deck)?saved.deck:names[0]);
       lastAnalyzedDeck=picker.value;
       analyze.disabled=false;
       runAnalysis();            // comparaison automatique dès l'ouverture de la fenêtre
-    } catch(e){msg.textContent=`Erreur : ${e.message}`;}
+    } catch(e){if(alive())msg.textContent=`Erreur : ${e.message}`;}
     // Remplacement : liste sélectionnée explicitement, aperçu affiché, confirmation
     // obligatoire. Annuler ne déclenche AUCUNE écriture.
     replaceBtn.onclick=async()=>{
@@ -438,8 +455,9 @@
         if(noop.length)lines.push(`${noop.length} note(s) cochée(s) sans changement : elles ne seront pas touchées.`);
         const ok=await askConfirm(dialog,`Confirmer le remplacement de ${selected.length} note(s) ?`,lines);
         if(!ok){msg.textContent='Remplacement annulé : aucune écriture effectuée.';return;}
-        const replacements=selected.map(({e,m,wanted})=>({noteId:m.id,model:m.model,deck:m.deck,type:e.card.type,
-          fingerprint:m.front,originalSecond:m.second,mod:m.mod,first:wanted[0],second:wanted[1]}));
+        const replacements=selected.map(({e,m,wanted})=>({noteId:m.id,model:m.model,deck:m.deck,decks:m.decks,type:e.card.type,
+          // Champs complets (non tronqués) : les versions courtes ne servent qu'à l'affichage.
+          fingerprint:m.frontFull||m.front,originalSecond:m.secondFull??m.second,mod:m.mod,first:wanted[0],second:wanted[1]}));
         replaceBtn.disabled=true; save.disabled=true;
         msg.textContent=`Remplacement en cours : ${replacements.length} note(s)…`;
         const r=await api('REPLACE',{replacements});

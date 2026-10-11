@@ -10,8 +10,9 @@ const http = require('node:http');
 
 const EXT = p => path.join(__dirname, '..', 'extension', p);
 let pass = 0, fail = 0;
-const t = (name, fn) => { try { fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
-const ta = async (name, fn) => { try { await fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + (e && e.stack ? e.stack.split('\n').slice(0, 5).join('\n         ') : e.message)); } };
+let declared = 0;   // nombre de tests déclarés, pour détecter une suite tronquée
+const t = (name, fn) => { declared++; try { fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
+const ta = async (name, fn) => { declared++; try { await fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + (e && e.stack ? e.stack.split('\n').slice(0, 5).join('\n         ') : e.message)); } };
 const load = (ctx, name) => vm.runInContext(fs.readFileSync(EXT(name), 'utf8'), ctx, { filename: name });
 
 /* ------------------------------------------------------------------ *
@@ -403,7 +404,7 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }
   vm.createContext(ctx);
   load(ctx, 'cards.js');
   load(ctx, 'content.js');
-  return { ctx, root, body, listeners, observers };
+  return { ctx, root, body, listeners, observers, documentListeners };
 }
 const countButtons = root => root.querySelectorAll('.ankibridge-btn').length;
 const JSON13 = JSON.stringify({ cards: [...basic(10), { type: 'cloze', text: 'Le {{c1::GLOOP}} fabrique.', extra: '' }, { type: 'cloze', text: 'Le {{c1::ZORK}} sert.', extra: '' }, { type: 'cloze', text: 'Le GLOOP fait {{c1::42 blops}}.', extra: '' }] });
@@ -511,6 +512,72 @@ async function contentTests() {
     await new Promise(r => setTimeout(r, 400));
     assert.ok(sent.includes('IMPORT'), 'IMPORT attendu');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /13 ajoutée\(s\)/);
+  });
+
+  /* --- régression PR #1 : courses entre analyse, édition et fermeture de la fenêtre --- */
+  await ta('édition pendant une analyse en vol : la comparaison reste relançable', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const sent = [];
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Cours', 'Par défaut'] };
+      sent.push(msg.type);
+      return pending.then(() => ({ ok: true, value: { items: [], totalExisting: 0, scanned: 0, partial: false, scope: 'Cours' } }));
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal(ov.querySelector('.ankibridge-review').disabled, true, 'analyse en vol : bouton attendu désactivé');
+    ov.querySelectorAll('textarea')[0].dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(ov.querySelector('.ankibridge-review').disabled, false,
+      'le bouton de comparaison reste bloqué après une édition pendant l’analyse');
+    release();
+    await new Promise(r => setTimeout(r, 150));
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/,
+      'un résultat périmé ne doit pas écraser le message d’édition');
+  });
+  await ta('fermeture de la fenêtre pendant le chargement des paquets : aucune analyse déclenchée', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const sent = [];
+    const respond = msg => { sent.push(msg.type); return pending.then(() => respondOk([])(msg)); };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 200));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.ok(ov, 'fenêtre attendue');
+    assert.deepEqual(sent, ['DECKS'], 'seule la demande de paquets doit être en vol');
+    ov.querySelector('.ankibridge-close').click();
+    assert.equal(root.querySelector('.ankibridge-overlay'), null, 'la fenêtre doit être fermée');
+    release();
+    await new Promise(r => setTimeout(r, 300));
+    assert.ok(!sent.includes('ANALYZE'), 'aucune analyse ne doit partir sur une fenêtre fermée');
+  });
+  await ta('fermeture par Échap pendant une analyse : le résultat périmé est ignoré', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Cours', 'Par défaut'] };
+      return pending.then(() => ({ ok: true, value: { items: [], totalExisting: 0, scanned: 0, partial: false, scope: 'Cours' } }));
+    };
+    const { root, documentListeners } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const esc = (documentListeners.keydown || [])[0];
+    assert.ok(esc, 'écouteur clavier attendu');
+    const msgAvantFermeture = ov.querySelector('.ankibridge-msg').textContent;
+    esc({ key: 'Escape' });
+    assert.equal(root.querySelector('.ankibridge-overlay'), null, 'la fenêtre doit être fermée');
+    release();
+    await new Promise(r => setTimeout(r, 200));
+    assert.equal(ov.querySelector('.ankibridge-msg').textContent, msgAvantFermeture,
+      'la fenêtre fermée ne doit plus être mise à jour par un résultat périmé');
   });
 
   /* --- ancrage du bouton (régression : colonne étirée dans la grille ChatGPT) --- */
@@ -758,10 +825,11 @@ async function contentTests() {
     assert.ok(payload, 'REPLACE attendu');
     assert.equal(payload.length, 1);
     assert.deepEqual(Object.keys(payload[0]).sort(),
-      ['deck', 'fingerprint', 'first', 'model', 'mod', 'noteId', 'originalSecond', 'second', 'type'].sort());
+      ['deck', 'decks', 'fingerprint', 'first', 'model', 'mod', 'noteId', 'originalSecond', 'second', 'type'].sort());
     assert.equal(payload[0].noteId, 4242);
     assert.equal(payload[0].model, 'Basique');
     assert.equal(payload[0].deck, 'Cours');
+    assert.deepEqual(payload[0].decks, ['Cours'], 'ensemble des paquets transmis pour l’anti-conflit');
     assert.equal(payload[0].type, 'basic');
     assert.equal(payload[0].fingerprint, 'Q1');
     assert.equal(payload[0].originalSecond, 'Ancienne réponse');
@@ -1070,6 +1138,74 @@ async function replaceTests() {
       assert.ok(!['deleteNotes', 'deleteDecks', 'changeDeck', 'removeNotes', 'deleteCards', 'deleteModels', 'removeEmptyNotes'].includes(a), 'action destructive : ' + a);
     }
   });
+  /* --- régression review PR #2 : sûreté du remplacement --- */
+  await ta('P1 : plus de 60 candidats -> unicité non prouvable, remplacement refusé', async () => {
+    // 61 notes partagent le même premier champ : une tranche de 60 ne doit JAMAIS
+    // permettre de conclure à une note unique.
+    const ids = [];
+    for (let i = 0; i < 61; i++) ids.push(add('Basique', ['Question foule', 'Réponse ' + i], 'Par défaut'));
+    const writesBefore = state.writes.length;
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: ids[0], model: 'Basique', deck: 'Par défaut', type: 'basic',
+      fingerprint: 'Question foule', originalSecond: 'Réponse 0', mod: state.notes.get(ids[0]).mod,
+      first: 'Question foule', second: 'Réponse modifiée' }] });
+    assert.equal(r.value.updated, 0);
+    assert.equal(r.value.failed.length, 1);
+    assert.match(r.value.failed[0].reason, /Trop de notes|unicité/i);
+    assert.equal(state.writes.length, writesBefore, 'aucune écriture ne doit avoir lieu');
+  });
+  await ta('P2 : premier champ de plus de 240 caractères -> remplacement légitime accepté', async () => {
+    const longFirst = 'Question ' + 'x'.repeat(300);
+    const id = add('Basique', [longFirst, 'Réponse longue'], 'Par défaut');
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: id, model: 'Basique', deck: 'Par défaut', type: 'basic',
+      fingerprint: longFirst, originalSecond: 'Réponse longue', mod: state.notes.get(id).mod,
+      first: longFirst, second: 'Réponse longue modifiée' }] });
+    assert.equal(r.value.updated, 1, JSON.stringify(r.value));
+    assert.equal(fieldValue(state.notes.get(id).fields.Verso), 'Réponse longue modifiée');
+  });
+  await ta('P2 : second champ de plus de 4000 caractères -> remplacement légitime accepté', async () => {
+    const longSecond = 'y'.repeat(4500);
+    const id = add('Basique', ['Question verso long', longSecond], 'Par défaut');
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: id, model: 'Basique', deck: 'Par défaut', type: 'basic',
+      fingerprint: 'Question verso long', originalSecond: longSecond, mod: state.notes.get(id).mod,
+      first: 'Question verso long', second: longSecond + ' révisé' }] });
+    assert.equal(r.value.updated, 1, JSON.stringify(r.value));
+  });
+  await ta('P2 : note multi-paquets [A, B] devenue [A, C] -> remplacement refusé', async () => {
+    const id = add('Basique', ['Question multi', 'Réponse multi'], 'Médecine (TEST)');
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: id, model: 'Basique', deck: 'Médecine (TEST)',
+      decks: ['Médecine (TEST)', 'Autre spécialité'], type: 'basic',
+      fingerprint: 'Question multi', originalSecond: 'Réponse multi', mod: state.notes.get(id).mod,
+      first: 'Question multi', second: 'Réponse multi modifiée' }] });
+    assert.equal(r.value.updated, 0);
+    assert.match(r.value.failed[0].reason, /déplacée/);
+  });
+  await ta('P2 : cloze {{c1}} répété comparé au même indice unique -> remplacement accepté', async () => {
+    const text = 'Le {{c1::cœur}} et le {{c1::poumon}}.';
+    const id = add('Texte à trous', [text, ''], 'Par défaut');
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: id, model: 'Texte à trous', deck: 'Par défaut', type: 'cloze',
+      fingerprint: text, originalSecond: '', mod: state.notes.get(id).mod,
+      first: 'Le {{c1::cœur}} et le {{c1::poumon}} fonctionnent.', second: '' }] });
+    assert.equal(r.value.updated, 1, JSON.stringify(r.value));
+  });
+  await ta('P2 : unicité revérifiée sans cache juste avant écriture', async () => {
+    const id = add('Basique', ['Question cache', 'Réponse cache'], 'Par défaut');
+    const first = await send(listeners, { type: 'ANALYZE', deck: 'Par défaut', cards: [{ type: 'basic', front: 'Question cache', back: 'Réponse cache' }] });
+    assert.equal(first.value.items[0].replaceable, true, 'cas initial : remplaçable');
+    // Une seconde note identique apparaît APRÈS l'analyse : le cache ne doit pas
+    // masquer l'ambiguïté nouvelle.
+    add('Basique', ['Question cache', 'Réponse cache bis'], 'Par défaut');
+    const r = await send(listeners, { type: 'REPLACE', replacements: [{
+      noteId: id, model: 'Basique', deck: 'Par défaut', type: 'basic',
+      fingerprint: 'Question cache', originalSecond: 'Réponse cache', mod: state.notes.get(id).mod,
+      first: 'Question cache', second: 'Réponse cache modifiée' }] });
+    assert.equal(r.value.updated, 0, 'le cache ne doit pas masquer la note apparue entre-temps');
+    assert.match(r.value.failed[0].reason, /Plusieurs notes identiques/);
+  });
   await new Promise(r => server.close(r));
 }
 
@@ -1092,6 +1228,29 @@ function manifestTests() {
       for (const hurl of hosts) assert.ok(/127\.0\.0\.1|chatgpt\.com|chat\.openai\.com|www\.w3\.org/.test(hurl), `${f}: URL distante ${hurl}`);
     }
   });
+  t('le runner refuse de signaler un succès sur une suite incomplète', () => {
+    // Garde anti-« succès trompeur » : un échec, une section manquante ou des
+    // tests non exécutés doivent produire un code de sortie non nul.
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 5, expectedSections: 5, declared: 10, executed: 10 }).code, 0);
+    assert.equal(runnerVerdict({ fail: 1, ranSections: 5, expectedSections: 5, declared: 10, executed: 10 }).code, 1);
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 4, expectedSections: 5, declared: 10, executed: 10 }).code, 4, 'section manquante');
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 5, expectedSections: 5, declared: 10, executed: 7 }).code, 4, 'tests non exécutés');
+  });
+  t('P2 : sonde des ports dans l’ordre standard, 8765 puis 8766', () => {
+    const src = fs.readFileSync(EXT('background.js'), 'utf8');
+    assert.match(src, /const PROBE_PORTS = \[8765, 8766\]/,
+      'l’ordre standard doit être respecté ; la vérification de version écarte un port occupé');
+  });
+  t('aucune information de configuration personnelle dans les sources', () => {
+    // Aucun détail de la machine de développement ne doit sortir dans un dépôt public.
+    // Motifs génériques uniquement : ce test ne doit lui-même nommer aucune donnée perso.
+    const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|css|json)$/.test(f));
+    for (const f of files) {
+      const src = fs.readFileSync(EXT(f), 'utf8');
+      assert.ok(!/\bHermes\b|PORT_REGISTRY|\/Users\/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i.test(src),
+        `${f}: information de configuration personnelle`);
+    }
+  });
   t('aucune clé API / télémétrie dans les sources', () => {
     const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|json)$/.test(f));
     for (const f of files) {
@@ -1101,13 +1260,38 @@ function manifestTests() {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Verdict du runner : logique pure, donc testable. Un échec, une      *
+ * section manquante ou des tests non exécutés donnent un code non nul. *
+ * ------------------------------------------------------------------ */
+function runnerVerdict({ fail, ranSections, expectedSections, declared, executed }) {
+  if (ranSections !== expectedSections) return { code: 4, reason: `sections exécutées : ${ranSections}/${expectedSections}` };
+  if (declared !== executed) return { code: 4, reason: `tests exécutés : ${executed}/${declared}` };
+  return { code: fail ? 1 : 0, reason: fail ? `${fail} test(s) en échec` : 'ok' };
+}
+
+const EXPECTED_SECTIONS = 6;
+const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 120000);
+let ranSections = 0;
+let suiteDone = false;
+const watchdog = setTimeout(() => {
+  if (suiteDone) return;
+  console.error(`\nERREUR : la suite n'a pas terminé en ${Math.round(SUITE_TIMEOUT_MS / 1000)} s (section en cours : ${ranSections}).`);
+  process.exit(2);
+}, SUITE_TIMEOUT_MS);
+// Une promesse rejetée ou une exception hors test ne doit jamais finir en code 0.
+process.on('unhandledRejection', e => { console.error('\nERREUR : promesse rejetée non gérée :', e); process.exit(3); });
+process.on('uncaughtException', e => { console.error('\nERREUR : exception non capturée :', e); process.exit(3); });
+
 (async () => {
-  console.log('=== 1. Analyse JSON (cards.js) ==='); parserTests();
-  console.log('\n=== 2. Port AnkiConnect ==='); await portTests();
-  console.log('\n=== 3. Intégration AnkiConnect simulé ==='); await integrationTests();
-  console.log('\n=== 4. content.js : bouton et modale ==='); await contentTests();
-  console.log('\n=== 6. Localisation et remplacement sûr ==='); await replaceTests();
-  console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests();
-  console.log(`\nRésultat : ${pass} réussis, ${fail} échoués`);
-  process.exit(fail ? 1 : 0);
+  console.log('=== 1. Analyse JSON (cards.js) ==='); parserTests(); ranSections++;
+  console.log('\n=== 2. Port AnkiConnect ==='); await portTests(); ranSections++;
+  console.log('\n=== 3. Intégration AnkiConnect simulé ==='); await integrationTests(); ranSections++;
+  console.log('\n=== 4. content.js : bouton et modale ==='); await contentTests(); ranSections++;
+  console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests(); ranSections++;
+  console.log('\n=== 6. Localisation et remplacement sûr ==='); await replaceTests(); ranSections++;
+  const verdict = runnerVerdict({ fail, ranSections, expectedSections: EXPECTED_SECTIONS, declared, executed: pass + fail });
+  console.log(`\nRésultat : ${pass} réussis, ${fail} échoués` + (verdict.code ? ` — ${verdict.reason}` : ''));
+  suiteDone = true; clearTimeout(watchdog);
+  process.exit(verdict.code);
 })();
