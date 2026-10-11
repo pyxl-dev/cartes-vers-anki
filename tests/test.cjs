@@ -10,8 +10,9 @@ const http = require('node:http');
 
 const EXT = p => path.join(__dirname, '..', 'extension', p);
 let pass = 0, fail = 0;
-const t = (name, fn) => { try { fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
-const ta = async (name, fn) => { try { await fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
+let declared = 0;   // nombre de tests déclarés, pour détecter une suite tronquée
+const t = (name, fn) => { declared++; try { fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
+const ta = async (name, fn) => { declared++; try { await fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
 const load = (ctx, name) => vm.runInContext(fs.readFileSync(EXT(name), 'utf8'), ctx, { filename: name });
 
 /* ------------------------------------------------------------------ *
@@ -283,9 +284,13 @@ class El {
     this.children = []; this.parent = null; this._listeners = {};
     this.className = this._attrs.class || '';
     this.dataset = {}; this.style = { setProperty() {} };
-    this.value = ''; this.checked = false; this.disabled = false; this.type = '';
+    this.value = ''; this.checked = false; this.disabled = false; this._type = '';
     this.onclick = null; this.open = false; this.id = this._attrs.id || '';
   }
+  // Comme dans le vrai DOM, `input.type = 'checkbox'` se reflète dans l'attribut.
+  get type() { return this._type; }
+  set type(v) { this._type = String(v); this._attrs.type = String(v); }
+  get parentElement() { return (this.parent && this.parent.tagName !== '#TEXT') ? this.parent : null; }
   _classes() { return String(this.className || '').split(/\s+/).filter(Boolean); }
   get classList() {
     const s = this; return { add: c => { if (!s._classes().includes(c)) s.className = (s.className + ' ' + c).trim(); }, remove: c => { s.className = s._classes().filter(x => x !== c).join(' '); }, contains: c => s._classes().includes(c) };
@@ -316,6 +321,7 @@ class El {
   getAttributeNames() { return Object.keys(this._attrs); }
   addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
   removeEventListener() {}
+  dispatchEvent(ev) { for (const f of (this._listeners[ev.type] || [])) f({ target: this, type: ev.type, stopPropagation() {} }); return true; }
   focus() {} select() {} stopPropagation() {}
   click() { if (typeof this.onclick === 'function') this.onclick({ target: this, stopPropagation() {} }); for (const f of this._listeners.click || []) f({ target: this, stopPropagation() {} }); }
   _matchesSimple(sel) {
@@ -352,7 +358,7 @@ class El {
 }
 const h = (tag, attrs, ...kids) => { const e = new El(tag, attrs || {}); if (kids.length) e.append(...kids); return e; };
 
-function contentHarness({ assistantBody, userBody, legacy }, respond) {
+function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }, respond) {
   const root = h('div', { id: 'root' });
   if (userBody) {
     const ub = h('div', { 'data-user-message-bubble': '' }, h('div', { class: 'markdown' }, ...userBody));
@@ -374,25 +380,29 @@ function contentHarness({ assistantBody, userBody, legacy }, respond) {
     removeEventListener: () => {}
   };
   const listeners = [];
+  const observers = [];
   const ctx = {
     console, setTimeout, clearTimeout, Date, JSON, Promise, document: doc,
-    MutationObserver: class { constructor(fn) { this.fn = fn; } observe() {} disconnect() {} },
+    MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} disconnect() {} },
+    // display piloté par l'attribut data-display des fixtures (grille / flex / bloc)
+    getComputedStyle: node => ({ display: (node && node._attrs && node._attrs['data-display']) || 'block' }),
     window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
     HTMLElement: class {}, HTMLTextAreaElement: class {},
     chrome: {
       runtime: {
         lastError: null,
-        sendMessage: (msg, cb) => { const r = respond(msg); cb(r); },
+        // respond peut renvoyer une promesse : nécessaire pour tester les courses
+        sendMessage: (msg, cb) => { const r = respond(msg); if (r && typeof r.then === 'function') r.then(cb); else cb(r); },
         onMessage: { addListener: fn => listeners.push(fn) }
       },
-      storage: { local: { get: async () => ({ deck: 'Cours' }), set: async () => {} } }
+      storage: { local: { get: async () => ({ deck: savedDeck }), set: async () => {} } }
     }
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   load(ctx, 'cards.js');
   load(ctx, 'content.js');
-  return { ctx, root, body, listeners };
+  return { ctx, root, body, listeners, observers, documentListeners };
 }
 const countButtons = root => root.querySelectorAll('.ankibridge-btn').length;
 const JSON13 = JSON.stringify({ cards: [...basic(10), { type: 'cloze', text: 'Le {{c1::GLOOP}} fabrique.', extra: '' }, { type: 'cloze', text: 'Le {{c1::ZORK}} sert.', extra: '' }, { type: 'cloze', text: 'Le GLOOP fait {{c1::42 blops}}.', extra: '' }] });
@@ -411,21 +421,23 @@ async function contentTests() {
     assert.equal(countButtons(root), 1);
     assert.equal(root.querySelector('.ankibridge-btn').textContent, 'Ajouter 13 cartes à Anki');
   });
-  await ta('le bouton est placé dans le conteneur de l’assistant, après le bloc de code', async () => {
+  await ta('le conteneur du bouton est placé dans le message assistant, après le bloc de code', async () => {
     const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
     await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
     const btn = root.querySelector('.ankibridge-btn');
-    assert.ok(btn.closest('[data-dil-source-message-id]'));
-    assert.equal(btn.previousElementSibling.tagName, 'PRE');
+    assert.ok(btn.closest('[data-dil-source-message-id]'), 'le bouton doit rester dans le message assistant');
+    assert.equal(wrap.previousElementSibling.tagName, 'PRE', 'le conteneur suit le bloc de code');
   });
-  await ta('re-rendu : un second scan ne duplique pas le bouton', async () => {
-    const { ctx, root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+  await ta('re-rendu : un second scan sur le MÊME DOM ne duplique pas le conteneur', async () => {
+    const { root, observers } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
     await new Promise(r => setTimeout(r, 700));
-    assert.equal(countButtons(root), 1);
-    const fn = ctx.document.documentElement; void fn;
-    // rejoue la séquence de balayage comme le fait MutationObserver
-    await new Promise(r => { setTimeout(() => r(), 600); });
-    assert.equal(countButtons(root), 1);
+    assert.equal(root.querySelectorAll('.ankibridge-actions').length, 1);
+    assert.ok(observers.length >= 1, 'aucun observateur enregistré');
+    observers[0].fn();                       // rejoue le balayage, comme le fait le site
+    await new Promise(r => setTimeout(r, 700));
+    assert.equal(root.querySelectorAll('.ankibridge-actions').length, 1, 'conteneur dupliqué');
+    assert.equal(root.querySelectorAll('.ankibridge-btn').length, 1, 'bouton dupliqué');
   });
   await ta('le message de l’utilisateur n’obtient jamais de bouton', async () => {
     const { root } = contentHarness({ userBody: [h('pre', {}, h('code', {}, JSON13))], assistantBody: [h('p', {}, 'réponse sans code')] }, respondOk([]));
@@ -485,6 +497,187 @@ async function contentTests() {
     assert.ok(sent.includes('IMPORT'), 'IMPORT attendu');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /13 ajoutée\(s\)/);
   });
+
+  /* --- régression PR #1 : courses entre analyse, édition et fermeture de la fenêtre --- */
+  await ta('édition pendant une analyse en vol : la comparaison reste relançable', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const sent = [];
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Cours', 'Par défaut'] };
+      sent.push(msg.type);
+      return pending.then(() => ({ ok: true, value: { items: [], totalExisting: 0, scanned: 0, partial: false, scope: 'Cours' } }));
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal(ov.querySelector('.ankibridge-review').disabled, true, 'analyse en vol : bouton attendu désactivé');
+    ov.querySelectorAll('textarea')[0].dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(ov.querySelector('.ankibridge-review').disabled, false,
+      'le bouton de comparaison reste bloqué après une édition pendant l’analyse');
+    release();
+    await new Promise(r => setTimeout(r, 150));
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/,
+      'un résultat périmé ne doit pas écraser le message d’édition');
+  });
+  await ta('fermeture de la fenêtre pendant le chargement des paquets : aucune analyse déclenchée', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const sent = [];
+    const respond = msg => { sent.push(msg.type); return pending.then(() => respondOk([])(msg)); };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 200));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.ok(ov, 'fenêtre attendue');
+    assert.deepEqual(sent, ['DECKS'], 'seule la demande de paquets doit être en vol');
+    ov.querySelector('.ankibridge-close').click();
+    assert.equal(root.querySelector('.ankibridge-overlay'), null, 'la fenêtre doit être fermée');
+    release();
+    await new Promise(r => setTimeout(r, 300));
+    assert.ok(!sent.includes('ANALYZE'), 'aucune analyse ne doit partir sur une fenêtre fermée');
+  });
+  await ta('fermeture par Échap pendant une analyse : le résultat périmé est ignoré', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Cours', 'Par défaut'] };
+      return pending.then(() => ({ ok: true, value: { items: [], totalExisting: 0, scanned: 0, partial: false, scope: 'Cours' } }));
+    };
+    const { root, documentListeners } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const esc = (documentListeners.keydown || [])[0];
+    assert.ok(esc, 'écouteur clavier attendu');
+    const msgAvantFermeture = ov.querySelector('.ankibridge-msg').textContent;
+    esc({ key: 'Escape' });
+    assert.equal(root.querySelector('.ankibridge-overlay'), null, 'la fenêtre doit être fermée');
+    release();
+    await new Promise(r => setTimeout(r, 200));
+    assert.equal(ov.querySelector('.ankibridge-msg').textContent, msgAvantFermeture,
+      'la fenêtre fermée ne doit plus être mise à jour par un résultat périmé');
+  });
+
+  /* --- ancrage du bouton (régression : colonne étirée dans la grille ChatGPT) --- */
+  await ta('bouton : enveloppé dans .ankibridge-actions, unique, juste après le bloc de code', async () => {
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wraps = root.querySelectorAll('.ankibridge-actions');
+    assert.equal(wraps.length, 1, 'un seul conteneur attendu');
+    assert.equal(wraps[0].querySelectorAll('.ankibridge-btn').length, 1);
+    assert.equal(wraps[0].previousElementSibling.tagName, 'PRE', 'le conteneur suit le bloc de code');
+    assert.equal(root.querySelectorAll('.ankibridge-btn').length, 1);
+  });
+  await ta('grille ChatGPT : le bouton n’est PAS inséré dans le conteneur grid', async () => {
+    const grid = h('div', { 'data-display': 'grid' }, h('pre', {}, h('code', {}, JSON13)));
+    const { root } = contentHarness({ assistantBody: [grid] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
+    assert.ok(wrap, 'conteneur absent');
+    assert.notEqual(wrap.parentElement, grid, 'le bouton ne doit pas être un item de la grille');
+    assert.equal(wrap.previousElementSibling, grid, 'le bouton doit être placé après la grille');
+  });
+  await ta('flex : le bouton reste hors du conteneur flex', async () => {
+    const flex = h('div', { 'data-display': 'flex' }, h('pre', {}, h('code', {}, JSON13)));
+    const { root } = contentHarness({ assistantBody: [flex] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
+    assert.notEqual(wrap.parentElement, flex);
+  });
+  await ta('CSS : conteneur neutralisant grille/flex + bouton compact', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const actions = (css.match(/\.ankibridge-actions\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['grid-column', 'align-self', 'width:100%', 'height:auto', 'flex:0 0 auto']) assert.ok(actions.includes(p), 'règle .ankibridge-actions sans ' + p);
+    const btn = (css.match(/\.ankibridge-btn\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['display:inline-flex', 'width:max-content', 'align-items:center', 'justify-content:center', 'height:auto', 'flex:none', 'min-height', 'max-width:100%']) assert.ok(btn.includes(p), 'règle .ankibridge-btn sans ' + p);
+  });
+
+  /* --- hiérarchie des paquets + comparaison automatique --- */
+  const DECKS_H = ['Cardiologie', 'Cardiologie::Item 221 — Test', 'Cardiologie::Item 221 — Test::Sous-item'];
+  const respondDecks = (decks, calls) => msg => {
+    if (msg.type === 'DECKS') return { ok: true, value: decks };
+    if (msg.type === 'ANALYZE') { calls.push(msg.deck); return { ok: true, value: { items: Array.from({ length: 13 }, () => ({ kind: 'new', matches: [] })), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck } }; }
+    return { ok: true, value: { added: 13, skipped: 0, errors: [], total: 13 } };
+  };
+  await ta('paquets : libellé hiérarchique, valeur = nom complet « Parent::Enfant »', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 600));
+    const opts = root.querySelectorAll('.ankibridge-overlay select option');
+    assert.deepEqual(opts.map(o => o.value), DECKS_H);
+    assert.deepEqual(opts.map(o => o.textContent), ['Cardiologie', 'Cardiologie › Item 221 — Test', 'Cardiologie › Item 221 — Test › Sous-item']);
+  });
+  await ta('comparaison automatique à l’ouverture, sur le paquet mémorisé', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Cardiologie::Item 221 — Test' }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    assert.ok(calls.length >= 1, 'aucune analyse automatique déclenchée');
+    assert.equal(calls[0], 'Cardiologie::Item 221 — Test', 'analyse faite sur le mauvais paquet');
+    assert.equal(root.querySelector('.ankibridge-overlay .ankibridge-action').disabled, false, 'import non réactivé après analyse');
+  });
+  await ta('changer de paquet relance la comparaison automatiquement (sans clic)', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Cardiologie' }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const before = calls.length;
+    const ov = root.querySelector('.ankibridge-overlay');
+    const sel = ov.querySelector('select');
+    sel.value = 'Cardiologie::Item 221 — Test::Sous-item';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, true, 'import doit être désactivé pendant la nouvelle comparaison');
+    await new Promise(r => setTimeout(r, 1200));
+    assert.ok(calls.length > before, 'aucune analyse relancée après changement de paquet');
+    assert.equal(calls[calls.length - 1], 'Cardiologie::Item 221 — Test::Sous-item');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false, 'import non réactivé');
+  });
+  await ta('anti-course : un résultat périmé n’écrase pas le paquet courant', async () => {
+    let n = 0;
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Lent', 'Rapide'] };
+      if (msg.type === 'ANALYZE') {
+        n++;
+        const first = n === 1;
+        const value = { items: Array.from({ length: 13 }, () => ({ kind: first ? 'exact' : 'new', matches: [] })), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck };
+        // 1re analyse (paquet « Lent ») répond APRÈS la 2e : son résultat doit être ignoré
+        return first ? new Promise(r => setTimeout(() => r({ ok: true, value }), 1200)) : { ok: true, value };
+      }
+      return { ok: true, value: { added: 0, skipped: 0, errors: [], total: 0 } };
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Lent' }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 250));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const sel = ov.querySelector('select');
+    sel.value = 'Rapide';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 2500));
+    const checked = ov.querySelectorAll('.ankibridge-card input[type=checkbox]').length
+      - ov.querySelectorAll('.ankibridge-card input[type=checkbox]:not([checked])').length;
+    void checked;
+    const checkedCount = [...ov.querySelectorAll('.ankibridge-card input[type=checkbox]')].filter(x => x.checked).length;
+    assert.equal(checkedCount, 13, 'le résultat périmé (doublons) a été appliqué à tort');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false);
+  });
+  await ta('bouton manuel renommé « Relancer la comparaison » (secours)', async () => {
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(root.querySelector('.ankibridge-overlay .ankibridge-review').textContent, 'Relancer la comparaison');
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -493,7 +686,7 @@ async function contentTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.3.1', () => assert.equal(mf.version, '1.3.1'));
+  t('version 1.3.2', () => assert.equal(mf.version, '1.3.2'));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));
@@ -506,6 +699,14 @@ function manifestTests() {
       for (const hurl of hosts) assert.ok(/127\.0\.0\.1|chatgpt\.com|chat\.openai\.com|www\.w3\.org/.test(hurl), `${f}: URL distante ${hurl}`);
     }
   });
+  t('le runner refuse de signaler un succès sur une suite incomplète', () => {
+    // Garde anti-« succès trompeur » : un échec, une section manquante ou des
+    // tests non exécutés doivent produire un code de sortie non nul.
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 5, expectedSections: 5, declared: 10, executed: 10 }).code, 0);
+    assert.equal(runnerVerdict({ fail: 1, ranSections: 5, expectedSections: 5, declared: 10, executed: 10 }).code, 1);
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 4, expectedSections: 5, declared: 10, executed: 10 }).code, 4, 'section manquante');
+    assert.equal(runnerVerdict({ fail: 0, ranSections: 5, expectedSections: 5, declared: 10, executed: 7 }).code, 4, 'tests non exécutés');
+  });
   t('aucune clé API / télémétrie dans les sources', () => {
     const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|json)$/.test(f));
     for (const f of files) {
@@ -515,12 +716,37 @@ function manifestTests() {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Verdict du runner : logique pure, donc testable. Un échec, une      *
+ * section manquante ou des tests non exécutés donnent un code non nul. *
+ * ------------------------------------------------------------------ */
+function runnerVerdict({ fail, ranSections, expectedSections, declared, executed }) {
+  if (ranSections !== expectedSections) return { code: 4, reason: `sections exécutées : ${ranSections}/${expectedSections}` };
+  if (declared !== executed) return { code: 4, reason: `tests exécutés : ${executed}/${declared}` };
+  return { code: fail ? 1 : 0, reason: fail ? `${fail} test(s) en échec` : 'ok' };
+}
+
+const EXPECTED_SECTIONS = 5;
+const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 120000);
+let ranSections = 0;
+let suiteDone = false;
+const watchdog = setTimeout(() => {
+  if (suiteDone) return;
+  console.error(`\nERREUR : la suite n'a pas terminé en ${Math.round(SUITE_TIMEOUT_MS / 1000)} s (section en cours : ${ranSections}).`);
+  process.exit(2);
+}, SUITE_TIMEOUT_MS);
+// Une promesse rejetée ou une exception hors test ne doit jamais finir en code 0.
+process.on('unhandledRejection', e => { console.error('\nERREUR : promesse rejetée non gérée :', e); process.exit(3); });
+process.on('uncaughtException', e => { console.error('\nERREUR : exception non capturée :', e); process.exit(3); });
+
 (async () => {
-  console.log('=== 1. Analyse JSON (cards.js) ==='); parserTests();
-  console.log('\n=== 2. Port AnkiConnect ==='); await portTests();
-  console.log('\n=== 3. Intégration AnkiConnect simulé ==='); await integrationTests();
-  console.log('\n=== 4. content.js : bouton et modale ==='); await contentTests();
-  console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests();
-  console.log(`\nRésultat : ${pass} réussis, ${fail} échoués`);
-  process.exit(fail ? 1 : 0);
+  console.log('=== 1. Analyse JSON (cards.js) ==='); parserTests(); ranSections++;
+  console.log('\n=== 2. Port AnkiConnect ==='); await portTests(); ranSections++;
+  console.log('\n=== 3. Intégration AnkiConnect simulé ==='); await integrationTests(); ranSections++;
+  console.log('\n=== 4. content.js : bouton et modale ==='); await contentTests(); ranSections++;
+  console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests(); ranSections++;
+  const verdict = runnerVerdict({ fail, ranSections, expectedSections: EXPECTED_SECTIONS, declared, executed: pass + fail });
+  console.log(`\nRésultat : ${pass} réussis, ${fail} échoués` + (verdict.code ? ` — ${verdict.reason}` : ''));
+  suiteDone = true; clearTimeout(watchdog);
+  process.exit(verdict.code);
 })();

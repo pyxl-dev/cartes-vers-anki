@@ -1,5 +1,15 @@
-.ankibridge-btn {margin: 8px 0; padding:7px 12px; border-radius:10px; border:1px solid #386d50;
-  background:#e8f6ee; color:#17442b; font:600 12px system-ui; cursor:pointer}
+/* Conteneur du bouton. Un bouton inséré directement après <pre> devient une 2e
+   colonne étirée quand ChatGPT place le bloc de code dans une grille ou un flex.
+   Ce bloc est donc un élément à part entière : pleine largeur, jamais étiré en
+   hauteur, et il neutralise la grille (grid-column) comme le flex (align-self). */
+.ankibridge-actions {display:block; box-sizing:border-box; width:100%; max-width:100%; min-width:0;
+  height:auto; margin:8px 0 2px; padding:0; flex:0 0 auto; align-self:flex-start; justify-self:start;
+  grid-column:1 / -1; grid-row:auto; text-align:left}
+.ankibridge-btn {display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  box-sizing:border-box; width:max-content; max-width:100%; height:auto; min-height:32px;
+  flex:none; align-self:flex-start; margin:0; padding:7px 12px; border-radius:10px;
+  border:1px solid #386d50; background:#e8f6ee; color:#17442b;
+  font:600 12px system-ui; line-height:1.25; text-align:center; cursor:pointer}
 .ankibridge-btn:hover {background:#d6eedf}
 .ankibridge-overlay {position:fixed;z-index:2147483646;inset:0;background:#111b24a8;
   display:flex;align-items:center;justify-content:center;padding:14px;font:14px system-ui;color:#16202a}
