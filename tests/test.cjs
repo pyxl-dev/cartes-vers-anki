@@ -1439,13 +1439,14 @@ function manifestTests() {
     assert.match(rules[0], /margin:0/);
   });
   t('aucune information de configuration personnelle dans les sources', () => {
-    // Aucun détail de la machine de développement ne doit sortir dans un dépôt public.
-    // Motifs génériques uniquement : ce test ne doit lui-même nommer aucune donnée perso.
+    // Règle volontairement GÉNÉRIQUE : elle ne nomme ni outil, ni agent, ni fichier
+    // d'un environnement particulier. Un chemin de compte, une adresse électronique
+    // ou un secret n'ont rien à faire dans un dépôt public.
     const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|css|json)$/.test(f));
     for (const f of files) {
       const src = fs.readFileSync(EXT(f), 'utf8');
-      assert.ok(!/\bHermes\b|PORT_REGISTRY|\/Users\/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i.test(src),
-        `${f}: information de configuration personnelle`);
+      assert.ok(!/\/Users\/[A-Za-z0-9._-]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|sk-[A-Za-z0-9]{10,}|BEGIN [A-Z ]*PRIVATE KEY/.test(src),
+        `${f}: chemin de compte, adresse électronique ou secret`);
     }
   });
   t('aucune clé API / télémétrie dans les sources', () => {
