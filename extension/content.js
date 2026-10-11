@@ -225,16 +225,41 @@
     const count = el('span','ankibridge-count','0 sélectionnée(s)');
     selectNew.type='button'; selectNone.type='button';
     bulk.append(selectNew, selectNone, count); main.append(bulk);
+    // Légende discrète : le statut ne repose jamais sur la seule couleur.
+    const legend=el('div','ankibridge-legend');
+    for(const [cls,word] of [['new','Nouvelle'],['similar','Formulation similaire'],['exact','Déjà présente (non réimportable)']]){
+      const cell=el('span','ankibridge-legenditem');
+      const d=el('span','ankibridge-dot '+cls);
+      d.setAttribute('role','img'); d.setAttribute('aria-label',word);
+      cell.append(d, document.createTextNode(' '+word));
+      legend.append(cell);
+    }
+    main.append(legend);
     const entries=[];
     cards.forEach((card,i)=>{
+      /* Structure de ligne volontairement NON imbriquée : la case d'import et le
+         point de statut sont FRÈRES de <details>, pas enfants de <summary>. Un
+         input interactif placé dans un <summary> déclencherait l'ouverture du
+         détail au clic et serait du HTML interactif imbriqué. Ici :
+         - cliquer la case sélectionne (elle est hors de <summary>) ;
+         - cliquer le titre ou le chevron déplie/replie le détail (natif). */
+      const row=el('div','ankibridge-row');
+      const check=el('input','ankibridge-pick');
+      check.type='checkbox'; check.checked=true;
+      check.setAttribute('aria-label',`Sélectionner la carte ${i+1} pour l'import`);
+      const dot=el('span','ankibridge-dot pending');
+      dot.setAttribute('role','img');
+      dot.setAttribute('aria-label','Comparaison en cours');
+      dot.setAttribute('title','Comparaison en cours');
+      const status=el('span','ankibridge-sr','Comparaison en cours');
+      status.setAttribute('id',`ankibridge-status-${i}`);
+      check.setAttribute('aria-describedby',`ankibridge-status-${i}`);
       const details=el('details','ankibridge-card');
       const summary=el('summary');
-      const check=el('input'); check.type='checkbox'; check.checked=true; check.className='ankibridge-pick';
-      check.setAttribute('aria-label',`Sélectionner la carte ${i+1}`);
-      check.addEventListener('click', e=>e.stopPropagation());
-      summary.append(check, document.createTextNode(` ${i+1}. ${card.type==='cloze'?'[Texte à trous] ':''}${(card.front||card.text).slice(0,115)}`));
-      details.append(summary);
-      const notice=el('div','ankibridge-notice','En attente de comparaison avec Anki.');
+      const typeLabel=card.type==='cloze'?'[Texte à trous] ':'[Basique] ';
+      const title=el('span','ankibridge-title',`${i+1}. ${typeLabel}${(card.front||card.text).slice(0,140)}`);
+      summary.append(title); details.append(summary);
+      const notice=el('div','ankibridge-notice','Comparaison avec Anki en cours…');
       details.append(notice);
       const firstLabel=el('label','',card.type==='cloze'?'Texte à trous ({{c1::...}})':'Question');
       const first=el('textarea'); first.value=card.type==='cloze'?card.text:card.front; firstLabel.append(first);
@@ -243,8 +268,9 @@
       details.append(firstLabel,secondLabel);
       // Bloc « remplacer » : vide tant qu'aucune note certaine n'est identifiée.
       const replaceRow=el('div','ankibridge-replacerow'); details.append(replaceRow);
-      main.append(details);
-      entries.push({card,check,first,second,notice,details,replaceRow,replace:null,item:null,kind:null});
+      row.append(check, dot, status, details);
+      main.append(row);
+      entries.push({card,check,dot,status,title,first,second,notice,details,replaceRow,replace:null,item:null,kind:null});
     });
     dialog.append(main);
     const foot=el('div','ankibridge-foot'); const msg=el('span','ankibridge-msg','Anki doit être ouvert. Aucune donnée ne part vers un service tiers.');
@@ -272,12 +298,31 @@
     for(const e of entries) e.check.addEventListener('change',()=>{updateCount();updateReplaceState();});
     selectNew.onclick=()=>{for(const e of entries)e.check.checked=(e.kind==='new');updateCount();updateReplaceState();};
     selectNone.onclick=()=>{for(const e of entries)e.check.checked=false;updateCount();updateReplaceState();};
+    // Statut d'une carte : libellé textuel + point coloré, jamais la couleur seule.
+    const STATUS={new:['Nouvelle','ankibridge-dot new'],similar:['Formulation similaire','ankibridge-dot similar'],exact:['Déjà présente','ankibridge-dot exact']};
+    const setStatus=(e,kind)=>{
+      const [word,cls]=STATUS[kind]||STATUS.new;
+      e.dot.className=cls;
+      e.dot.setAttribute('aria-label',word);
+      e.dot.setAttribute('title',word);
+      e.status.textContent=word;
+    };
+    // État intermédiaire neutre : aucune couleur de statut tant que la comparaison
+    // n'a pas abouti, et case d'import désactivée (rien n'est encore vérifié).
+    const setPending=()=>{for(const e of entries){
+      e.dot.className='ankibridge-dot pending';
+      e.dot.setAttribute('aria-label','Comparaison en cours');
+      e.dot.setAttribute('title','Comparaison en cours');
+      e.status.textContent='Comparaison en cours';
+      e.check.disabled=true;
+    }};
     const invalidate=({resetChecks=false,why}={})=>{revision++;analysisSeq++;verified=false;lastReport=null;save.disabled=true;
       if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
       for(const e of entries){e.replaceRow.replaceChildren();e.replace=null;}
       replaceBtn.disabled=true; replaceBtn.textContent='Remplacer les notes existantes';
       msg.textContent=why||'Cartes modifiées : relancer la comparaison avant import.';
       for(const e of entries)e.notice.textContent='Non vérifié depuis la dernière modification.';
+      setPending();
       updateCount();
     };
     for(const e of entries){e.first.addEventListener('input',()=>invalidate());e.second.addEventListener('input',()=>invalidate());}
@@ -334,6 +379,7 @@
       const token=++analysisSeq;
       const atStart=revision;
       analyze.disabled=true; save.disabled=true; replaceBtn.disabled=true;
+      setPending();
       msg.textContent=`Comparaison avec « ${deckLabel(picker.value)} » (et ses sous-paquets)…`;
       try {
         const current=AnkiCards.toCards({cards:currentCards()});
@@ -346,6 +392,10 @@
         report.items.forEach((item,i)=>{
           const e=entries[i];
           e.item=item; e.kind=item.kind;
+          // Le statut s'affiche immédiatement, sans ouvrir la ligne.
+          setStatus(e,item.kind);
+          // Un doublon certain n'est jamais importable : case désactivée ET décochée.
+          e.check.disabled=(item.kind==='exact');
           e.notice.replaceChildren();
           e.notice.className='ankibridge-notice '+item.kind;
           if(item.kind==='exact'){
