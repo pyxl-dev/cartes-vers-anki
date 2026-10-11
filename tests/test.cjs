@@ -283,9 +283,13 @@ class El {
     this.children = []; this.parent = null; this._listeners = {};
     this.className = this._attrs.class || '';
     this.dataset = {}; this.style = { setProperty() {} };
-    this.value = ''; this.checked = false; this.disabled = false; this.type = '';
+    this.value = ''; this.checked = false; this.disabled = false; this._type = '';
     this.onclick = null; this.open = false; this.id = this._attrs.id || '';
   }
+  // Comme dans le vrai DOM, `input.type = 'checkbox'` se reflète dans l'attribut.
+  get type() { return this._type; }
+  set type(v) { this._type = String(v); this._attrs.type = String(v); }
+  get parentElement() { return (this.parent && this.parent.tagName !== '#TEXT') ? this.parent : null; }
   _classes() { return String(this.className || '').split(/\s+/).filter(Boolean); }
   get classList() {
     const s = this; return { add: c => { if (!s._classes().includes(c)) s.className = (s.className + ' ' + c).trim(); }, remove: c => { s.className = s._classes().filter(x => x !== c).join(' '); }, contains: c => s._classes().includes(c) };
@@ -316,6 +320,7 @@ class El {
   getAttributeNames() { return Object.keys(this._attrs); }
   addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
   removeEventListener() {}
+  dispatchEvent(ev) { for (const f of (this._listeners[ev.type] || [])) f({ target: this, type: ev.type, stopPropagation() {} }); return true; }
   focus() {} select() {} stopPropagation() {}
   click() { if (typeof this.onclick === 'function') this.onclick({ target: this, stopPropagation() {} }); for (const f of this._listeners.click || []) f({ target: this, stopPropagation() {} }); }
   _matchesSimple(sel) {
@@ -352,7 +357,7 @@ class El {
 }
 const h = (tag, attrs, ...kids) => { const e = new El(tag, attrs || {}); if (kids.length) e.append(...kids); return e; };
 
-function contentHarness({ assistantBody, userBody, legacy }, respond) {
+function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }, respond) {
   const root = h('div', { id: 'root' });
   if (userBody) {
     const ub = h('div', { 'data-user-message-bubble': '' }, h('div', { class: 'markdown' }, ...userBody));
@@ -374,25 +379,29 @@ function contentHarness({ assistantBody, userBody, legacy }, respond) {
     removeEventListener: () => {}
   };
   const listeners = [];
+  const observers = [];
   const ctx = {
     console, setTimeout, clearTimeout, Date, JSON, Promise, document: doc,
-    MutationObserver: class { constructor(fn) { this.fn = fn; } observe() {} disconnect() {} },
+    MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} disconnect() {} },
+    // display piloté par l'attribut data-display des fixtures (grille / flex / bloc)
+    getComputedStyle: node => ({ display: (node && node._attrs && node._attrs['data-display']) || 'block' }),
     window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
     HTMLElement: class {}, HTMLTextAreaElement: class {},
     chrome: {
       runtime: {
         lastError: null,
-        sendMessage: (msg, cb) => { const r = respond(msg); cb(r); },
+        // respond peut renvoyer une promesse : nécessaire pour tester les courses
+        sendMessage: (msg, cb) => { const r = respond(msg); if (r && typeof r.then === 'function') r.then(cb); else cb(r); },
         onMessage: { addListener: fn => listeners.push(fn) }
       },
-      storage: { local: { get: async () => ({ deck: 'Cours' }), set: async () => {} } }
+      storage: { local: { get: async () => ({ deck: savedDeck }), set: async () => {} } }
     }
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   load(ctx, 'cards.js');
   load(ctx, 'content.js');
-  return { ctx, root, body, listeners };
+  return { ctx, root, body, listeners, observers };
 }
 const countButtons = root => root.querySelectorAll('.ankibridge-btn').length;
 const JSON13 = JSON.stringify({ cards: [...basic(10), { type: 'cloze', text: 'Le {{c1::GLOOP}} fabrique.', extra: '' }, { type: 'cloze', text: 'Le {{c1::ZORK}} sert.', extra: '' }, { type: 'cloze', text: 'Le GLOOP fait {{c1::42 blops}}.', extra: '' }] });
@@ -411,21 +420,23 @@ async function contentTests() {
     assert.equal(countButtons(root), 1);
     assert.equal(root.querySelector('.ankibridge-btn').textContent, 'Ajouter 13 cartes à Anki');
   });
-  await ta('le bouton est placé dans le conteneur de l’assistant, après le bloc de code', async () => {
+  await ta('le conteneur du bouton est placé dans le message assistant, après le bloc de code', async () => {
     const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
     await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
     const btn = root.querySelector('.ankibridge-btn');
-    assert.ok(btn.closest('[data-dil-source-message-id]'));
-    assert.equal(btn.previousElementSibling.tagName, 'PRE');
+    assert.ok(btn.closest('[data-dil-source-message-id]'), 'le bouton doit rester dans le message assistant');
+    assert.equal(wrap.previousElementSibling.tagName, 'PRE', 'le conteneur suit le bloc de code');
   });
-  await ta('re-rendu : un second scan ne duplique pas le bouton', async () => {
-    const { ctx, root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+  await ta('re-rendu : un second scan sur le MÊME DOM ne duplique pas le conteneur', async () => {
+    const { root, observers } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
     await new Promise(r => setTimeout(r, 700));
-    assert.equal(countButtons(root), 1);
-    const fn = ctx.document.documentElement; void fn;
-    // rejoue la séquence de balayage comme le fait MutationObserver
-    await new Promise(r => { setTimeout(() => r(), 600); });
-    assert.equal(countButtons(root), 1);
+    assert.equal(root.querySelectorAll('.ankibridge-actions').length, 1);
+    assert.ok(observers.length >= 1, 'aucun observateur enregistré');
+    observers[0].fn();                       // rejoue le balayage, comme le fait le site
+    await new Promise(r => setTimeout(r, 700));
+    assert.equal(root.querySelectorAll('.ankibridge-actions').length, 1, 'conteneur dupliqué');
+    assert.equal(root.querySelectorAll('.ankibridge-btn').length, 1, 'bouton dupliqué');
   });
   await ta('le message de l’utilisateur n’obtient jamais de bouton', async () => {
     const { root } = contentHarness({ userBody: [h('pre', {}, h('code', {}, JSON13))], assistantBody: [h('p', {}, 'réponse sans code')] }, respondOk([]));
@@ -485,6 +496,121 @@ async function contentTests() {
     assert.ok(sent.includes('IMPORT'), 'IMPORT attendu');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /13 ajoutée\(s\)/);
   });
+
+  /* --- ancrage du bouton (régression : colonne étirée dans la grille ChatGPT) --- */
+  await ta('bouton : enveloppé dans .ankibridge-actions, unique, juste après le bloc de code', async () => {
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wraps = root.querySelectorAll('.ankibridge-actions');
+    assert.equal(wraps.length, 1, 'un seul conteneur attendu');
+    assert.equal(wraps[0].querySelectorAll('.ankibridge-btn').length, 1);
+    assert.equal(wraps[0].previousElementSibling.tagName, 'PRE', 'le conteneur suit le bloc de code');
+    assert.equal(root.querySelectorAll('.ankibridge-btn').length, 1);
+  });
+  await ta('grille ChatGPT : le bouton n’est PAS inséré dans le conteneur grid', async () => {
+    const grid = h('div', { 'data-display': 'grid' }, h('pre', {}, h('code', {}, JSON13)));
+    const { root } = contentHarness({ assistantBody: [grid] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
+    assert.ok(wrap, 'conteneur absent');
+    assert.notEqual(wrap.parentElement, grid, 'le bouton ne doit pas être un item de la grille');
+    assert.equal(wrap.previousElementSibling, grid, 'le bouton doit être placé après la grille');
+  });
+  await ta('flex : le bouton reste hors du conteneur flex', async () => {
+    const flex = h('div', { 'data-display': 'flex' }, h('pre', {}, h('code', {}, JSON13)));
+    const { root } = contentHarness({ assistantBody: [flex] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const wrap = root.querySelector('.ankibridge-actions');
+    assert.notEqual(wrap.parentElement, flex);
+  });
+  await ta('CSS : conteneur neutralisant grille/flex + bouton compact', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const actions = (css.match(/\.ankibridge-actions\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['grid-column', 'align-self', 'width:100%', 'height:auto', 'flex:0 0 auto']) assert.ok(actions.includes(p), 'règle .ankibridge-actions sans ' + p);
+    const btn = (css.match(/\.ankibridge-btn\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['display:inline-flex', 'width:max-content', 'align-items:center', 'justify-content:center', 'height:auto', 'flex:none', 'min-height', 'max-width:100%']) assert.ok(btn.includes(p), 'règle .ankibridge-btn sans ' + p);
+  });
+
+  /* --- hiérarchie des paquets + comparaison automatique --- */
+  const DECKS_H = ['Cardiologie', 'Cardiologie::Item 221 — Test', 'Cardiologie::Item 221 — Test::Sous-item'];
+  const respondDecks = (decks, calls) => msg => {
+    if (msg.type === 'DECKS') return { ok: true, value: decks };
+    if (msg.type === 'ANALYZE') { calls.push(msg.deck); return { ok: true, value: { items: Array.from({ length: 13 }, () => ({ kind: 'new', matches: [] })), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck } }; }
+    return { ok: true, value: { added: 13, skipped: 0, errors: [], total: 13 } };
+  };
+  await ta('paquets : libellé hiérarchique, valeur = nom complet « Parent::Enfant »', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 600));
+    const opts = root.querySelectorAll('.ankibridge-overlay select option');
+    assert.deepEqual(opts.map(o => o.value), DECKS_H);
+    assert.deepEqual(opts.map(o => o.textContent), ['Cardiologie', 'Cardiologie › Item 221 — Test', 'Cardiologie › Item 221 — Test › Sous-item']);
+  });
+  await ta('comparaison automatique à l’ouverture, sur le paquet mémorisé', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Cardiologie::Item 221 — Test' }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    assert.ok(calls.length >= 1, 'aucune analyse automatique déclenchée');
+    assert.equal(calls[0], 'Cardiologie::Item 221 — Test', 'analyse faite sur le mauvais paquet');
+    assert.equal(root.querySelector('.ankibridge-overlay .ankibridge-action').disabled, false, 'import non réactivé après analyse');
+  });
+  await ta('changer de paquet relance la comparaison automatiquement (sans clic)', async () => {
+    const calls = [];
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Cardiologie' }, respondDecks(DECKS_H, calls));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const before = calls.length;
+    const ov = root.querySelector('.ankibridge-overlay');
+    const sel = ov.querySelector('select');
+    sel.value = 'Cardiologie::Item 221 — Test::Sous-item';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, true, 'import doit être désactivé pendant la nouvelle comparaison');
+    await new Promise(r => setTimeout(r, 1200));
+    assert.ok(calls.length > before, 'aucune analyse relancée après changement de paquet');
+    assert.equal(calls[calls.length - 1], 'Cardiologie::Item 221 — Test::Sous-item');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false, 'import non réactivé');
+  });
+  await ta('anti-course : un résultat périmé n’écrase pas le paquet courant', async () => {
+    let n = 0;
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Lent', 'Rapide'] };
+      if (msg.type === 'ANALYZE') {
+        n++;
+        const first = n === 1;
+        const value = { items: Array.from({ length: 13 }, () => ({ kind: first ? 'exact' : 'new', matches: [] })), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck };
+        // 1re analyse (paquet « Lent ») répond APRÈS la 2e : son résultat doit être ignoré
+        return first ? new Promise(r => setTimeout(() => r({ ok: true, value }), 1200)) : { ok: true, value };
+      }
+      return { ok: true, value: { added: 0, skipped: 0, errors: [], total: 0 } };
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Lent' }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 250));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const sel = ov.querySelector('select');
+    sel.value = 'Rapide';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 2500));
+    const checked = ov.querySelectorAll('.ankibridge-card input[type=checkbox]').length
+      - ov.querySelectorAll('.ankibridge-card input[type=checkbox]:not([checked])').length;
+    void checked;
+    const checkedCount = [...ov.querySelectorAll('.ankibridge-card input[type=checkbox]')].filter(x => x.checked).length;
+    assert.equal(checkedCount, 13, 'le résultat périmé (doublons) a été appliqué à tort');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false);
+  });
+  await ta('bouton manuel renommé « Relancer la comparaison » (secours)', async () => {
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(root.querySelector('.ankibridge-overlay .ankibridge-review').textContent, 'Relancer la comparaison');
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -493,7 +619,7 @@ async function contentTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.3.1', () => assert.equal(mf.version, '1.3.1'));
+  t('version 1.3.2', () => assert.equal(mf.version, '1.3.2'));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));

@@ -23,6 +23,25 @@
     );
     return [...new Set([...legacy, ...modern])];
   }
+  /* Un bouton inséré juste après <pre> devient une 2e colonne étirée quand ChatGPT
+     place le bloc de code dans une grille ou un flex. On remonte donc TOUT l'arbre
+     jusqu'au message en mémorisant le conteneur de mise en page le plus HAUT : c'est
+     après lui qu'on insère, pour ne jamais devenir un item de grille. Le CSS
+     neutralise le cas résiduel (grid-column / align-self). Aucun contenu n'est déplacé. */
+  const isLayoutContainer = d => d === 'grid' || d === 'inline-grid' || d === 'flex' || d === 'inline-flex';
+  function layoutSafeAnchor(pre, message) {
+    if (!pre) return message;
+    let anchor = pre;
+    let node = pre;
+    while (node.parentElement && node.parentElement !== message) {
+      const parent = node.parentElement;
+      let display = '';
+      try { display = getComputedStyle(parent).display; } catch (_) { display = ''; }
+      if (isLayoutContainer(display)) anchor = parent;   // on retient le plus haut
+      node = parent;                                     // et on continue de remonter
+    }
+    return anchor;
+  }
   function scan() {
     const messages = assistantMessageContainers();
     for (const message of messages) {
@@ -32,13 +51,19 @@
         try { cards = AnkiCards.toCards(block.textContent); } catch (_) { /* contenu ordinaire */ }
         if (cards) break;
       }
-      if (!cards) { message.querySelector('.ankibridge-btn')?.remove(); continue; }
-      let btn = message.querySelector('.ankibridge-btn');
-      if (!btn) {
-        btn = document.createElement('button'); btn.type = 'button'; btn.className = 'ankibridge-btn';
-        const anchor = message.querySelector('pre') || message;
-        anchor.insertAdjacentElement('afterend', btn);
+      if (!cards) { message.querySelector('.ankibridge-actions')?.remove(); continue; }
+      let wrap = message.querySelector('.ankibridge-actions');
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'ankibridge-actions';
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ankibridge-btn';
+        wrap.append(b);
+        const anchor = layoutSafeAnchor(message.querySelector('pre'), message);
+        if (anchor === message) message.append(wrap);
+        else anchor.insertAdjacentElement('afterend', wrap);
       }
+      const btn = wrap.querySelector('.ankibridge-btn');
       const label = `Ajouter ${cards.length} carte${cards.length>1?'s':''} à Anki`;
       if (btn.textContent !== label) btn.textContent = label;
       btn.onclick = () => showModal(cards);
@@ -63,7 +88,7 @@
     control.append(el('span','', 'Paquet Anki :'));
     const select=el('select'); select.setAttribute('aria-label','Paquet Anki');
     const placeholder=el('option','', 'Chargement des paquets...'); placeholder.value=''; select.append(placeholder);
-    const analyze=el('button','ankibridge-review','Comparer aux cartes existantes');
+    const analyze=el('button','ankibridge-review','Relancer la comparaison');
     analyze.type='button'; analyze.disabled=true;
     control.append(select,analyze); main.append(control);
     const entries=[];
@@ -94,20 +119,27 @@
     let verified=false;
     let revision=0;
     let lastReport=null;
-    const invalidate=()=>{revision++;verified=false;lastReport=null;save.disabled=true;
-      msg.textContent='Cartes modifiées : relancer la comparaison avant import.';
+    let analysisSeq=0;      // jeton anti-course : tout résultat périmé est ignoré
+    let debounceTimer=null;
+    // AnkiConnect renvoie des chemins complets « Parent::Enfant ». On n'affiche qu'un
+    // libellé lisible ; la valeur de l'option reste EXACTEMENT le nom complet.
+    const deckLabel=name=>String(name).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+    const invalidate=({resetChecks=false,why}={})=>{revision++;analysisSeq++;verified=false;lastReport=null;save.disabled=true;
+      if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
+      msg.textContent=why||'Cartes modifiées : relancer la comparaison avant import.';
       for(const e of entries)e.notice.textContent='Non vérifié depuis la dernière modification.';
     };
-    for(const e of entries){e.first.addEventListener('input',invalidate);e.second.addEventListener('input',invalidate);}
-    select.addEventListener('change',invalidate);
-    analyze.onclick=async()=>{
+    for(const e of entries){e.first.addEventListener('input',()=>invalidate());e.second.addEventListener('input',()=>invalidate());}
+    const runAnalysis=async()=>{
+      const token=++analysisSeq;
       const atStart=revision;
       analyze.disabled=true; save.disabled=true;
-      msg.textContent='Comparaison avec les notes du paquet (et de ses sous-paquets)...';
+      msg.textContent=`Comparaison avec « ${deckLabel(select.value)} » (et ses sous-paquets)…`;
       try {
         const current=AnkiCards.toCards({cards:currentCards()});
         const report=await api('ANALYZE',{deck:select.value,cards:current});
-        if(atStart!==revision){msg.textContent='Cartes modifiées pendant le scan ; relance la comparaison.';return;}
+        // Résultat périmé (paquet changé, cartes éditées, nouvelle analyse lancée) : on l'ignore.
+        if(token!==analysisSeq||atStart!==revision)return;
         verified=true;
         lastReport=report;
         let exact=0, similar=0;
@@ -136,9 +168,23 @@
           (report.partial?' Attention : analyse de similarité PARTIELLE, collection trop volumineuse. Les doublons exacts restent vérifiés globalement.':'')+
           ' Les ressemblances ne prouvent pas que le fait médical est identique.';
         save.disabled=false;
-      } catch(e){verified=false;msg.textContent='Comparaison impossible : '+e.message;}
-      finally{analyze.disabled=false;}
+      } catch(e){
+        if(token!==analysisSeq)return;
+        verified=false;
+        msg.textContent=`Comparaison impossible : ${e.message} — clique sur « Relancer la comparaison ».`;
+      }
+      finally{ if(token===analysisSeq) analyze.disabled=false; }
     };
+    analyze.onclick=runAnalysis;
+    // Changer de paquet relance la comparaison automatiquement (jamais d'import
+    // basé sur les conclusions du paquet précédent).
+    select.addEventListener('change',()=>{
+      // Nouveau paquet = conclusions de l'ancien jetées, cartes remises à l'état initial,
+      // puis comparaison automatique (aucun import basé sur l'ancien paquet).
+      invalidate({resetChecks:true,why:`Paquet changé : comparaison de « ${deckLabel(select.value)} » en cours…`});
+      clearTimeout(debounceTimer);
+      debounceTimer=setTimeout(runAnalysis,250);
+    });
     foot.append(msg,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
     overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
     const esc=(e)=>{if(e.key==='Escape'){overlay.remove();document.removeEventListener('keydown',esc);}};
@@ -146,11 +192,12 @@
     try {
       const names=await api('DECKS');
       select.replaceChildren();
-      names.forEach(name=>{const opt=el('option','',name);opt.value=name;select.append(opt);});
+      names.forEach(name=>{const opt=el('option','',deckLabel(name));opt.value=name;select.append(opt);});
       const saved=await chrome.storage.local.get('deck');
       if(names.includes(saved.deck))select.value=saved.deck;
       if(!names.length)throw new Error('Aucun paquet Anki disponible. Crée un paquet dans Anki.');
       analyze.disabled=false;
+      runAnalysis();            // comparaison automatique dès l'ouverture de la fenêtre
     } catch(e){msg.textContent=`Erreur : ${e.message}`;placeholder.textContent='Anki indisponible';}
     save.onclick=async()=>{
       try {

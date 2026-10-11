@@ -46,7 +46,9 @@ async function refresh(){
     const decks=await api('DECKS');
     const saved=await chrome.storage.local.get('deck');
     $('deck').replaceChildren();
-    for(const d of decks){const o=document.createElement('option');o.value=d;o.textContent=d;$('deck').append(o);}
+    // Libellé lisible par niveaux ; la valeur reste le nom complet Anki « Parent::Enfant ».
+    const deckLabel=d=>String(d).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+    for(const d of decks){const o=document.createElement('option');o.value=d;o.textContent=deckLabel(d);$('deck').append(o);}
     if(decks.includes(saved.deck))$('deck').value=saved.deck;
     invalidate(); status(`Anki connecté sur le port ${$('ankiPort').value}`
       +(portIsManual?' (port choisi manuellement)':' (détecté automatiquement)')

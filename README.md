@@ -26,8 +26,11 @@ Extension navigateur (Manifest V3) qui transforme les cartes générées par Cha
 2. Joindre ou coller le cours, et demander les cartes sous forme d'**un seul bloc de code JSON** (voir le schéma ci-dessous).
 3. Un bouton **« Ajouter N cartes à Anki »** apparaît automatiquement sous la réponse.
 4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet.
-5. Cliquer **« Comparer aux cartes existantes »** : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
-6. Cliquer **« Importer dans Anki »**. Les cartes déjà présentes ne sont jamais réimportées.
+5. La **comparaison se lance automatiquement** à l'ouverture (sur le dernier paquet utilisé) : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
+6. Changer de paquet dans la liste **relance la comparaison automatiquement** ; les conclusions du paquet précédent sont abandonnées et les cartes remises à l'état initial. Le bouton **« Relancer la comparaison »** reste disponible en secours.
+7. Cliquer **« Importer dans Anki »**. Les cartes déjà présentes ne sont jamais réimportées.
+
+Les paquets sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) tout en conservant le nom complet Anki `Parent::Enfant` en interne : un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**.
 
 **Mode de secours (indépendant du bouton).** Si le bouton d'import n'apparaît pas (par exemple après un changement d'interface de ChatGPT), copier le bloc JSON, ouvrir l'icône de l'extension, coller le JSON dans la zone de texte, puis **1. Vérifier les doublons** → **2. Importer la sélection**. Ce mode fonctionne même quand la détection automatique est cassée.
 
@@ -74,6 +77,8 @@ Deux contrôles complémentaires, tous deux exécutés **avant** l'ajout :
 
 - **Doublons exacts** — action `canAddNotes` d'AnkiConnect, portée **collection entière**, plus les répétitions internes au lot. Re-contrôle à l'insertion. Les cartes concernées sont décochées et jamais réimportées.
 - **Formulations proches** — comparaison **lexicale locale** (pas d'IA) des questions et réponses dans le paquet choisi et ses sous-paquets, plafonnée à 20 000 notes. L'interface indique explicitement si l'analyse est partielle. Ces cartes sont décochées par précaution et signalées « à vérifier » : deux questions proches peuvent tester deux faits différents.
+
+Changer de paquet relance la comparaison : un import ne peut jamais s'appuyer sur les conclusions d'un autre paquet ni sur une analyse devenue obsolète (résultat périmé ignoré, import désactivé tant que la comparaison en cours n'a pas abouti).
 
 Aucune carte existante n'est jamais supprimée ni modifiée.
 
