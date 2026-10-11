@@ -915,6 +915,17 @@ async function contentTests() {
     ov.querySelector('.ankibridge-selectnew').onclick();
     assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.checked).length, 10, 'jamais de réactivation des exacts');
   });
+  await ta('CSS : la case est dessinée par nos règles, indépendante du thème et de la page', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const pick = (css.match(/\.ankibridge-pick\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['appearance:none', 'width:18px', 'height:18px', 'border:2px solid', 'background:#fff', 'color-scheme:light']) {
+      assert.ok(pick.includes(p), 'règle .ankibridge-pick sans ' + p);
+    }
+    assert.ok(/\.ankibridge-pick:checked\{[^}]*background:#15803d/.test(css), 'état coché sans fond explicite');
+    assert.ok(/\.ankibridge-pick:checked\{[^}]*background-image:url\("data:image\/svg\+xml/.test(css), 'coche dessinée absente');
+    assert.ok(/\.ankibridge-pick:disabled\{[^}]*background:#e2e8f0/.test(css), 'état désactivé sans fond explicite');
+    assert.ok(/\.ankibridge-dialog\{[^}]*color-scheme:light/.test(css), 'le dialogue doit forcer le schéma clair');
+  });
   await ta('lot de 50 cartes : 50 lignes, 50 cases visibles, statuts corrects', async () => {
     const items = Array.from({ length: 50 }, (_, i) => anItem(i < 20 ? 'new' : i < 35 ? 'similar' : 'exact'));
     const ov = await openModal(respondOk(items), JSON.stringify({ cards: basic(50) }));
@@ -1211,7 +1222,7 @@ async function replaceTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.4.1', () => assert.equal(mf.version, '1.4.1'));
+  t('version 1.4.2', () => assert.equal(mf.version, '1.4.2'));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));
