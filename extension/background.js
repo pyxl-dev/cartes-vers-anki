@@ -15,16 +15,15 @@ function validatedPort(value) {
 
    1) Port fixé explicitement dans le popup  → prioritaire, toujours respecté.
    2) Port déjà détecté automatiquement      → réutilisé s'il répond encore.
-   3) Sinon, sonde des ports usuels. Ici 8766 (Anki) est essayé AVANT 8765, car
-      sur cette machine 8765 est occupé par Hermes Office 3D (voir
-      ~/Projects/PORT_REGISTRY.md) ; 8765 reste en second pour AnkiConnect standard.
+   3) Sinon, sonde des ports usuels dans l'ordre standard : 8765 puis 8766.
 
    La sonde n'accepte qu'un service qui se comporte réellement comme AnkiConnect
-   (HTTP 200, JSON {result, error}, action « version ») avec un délai court.
-   Un port occupé par un autre logiciel est écarté sans lui envoyer la moindre
-   écriture : l'extension ne parle qu'à un service identifié comme AnkiConnect.
+   (HTTP 200, JSON {result, error}, action « version » renvoyant un numéro) avec
+   un délai court. Un port occupé par un autre logiciel est écarté sans lui
+   envoyer la moindre écriture : l'extension ne parle qu'à un service identifié
+   comme AnkiConnect.
 --------------------------------------------------------------------------- */
-const PROBE_PORTS = [8766, 8765]; // Anki d'abord ; 8765 est pris par Hermes Office 3D sur ce Mac
+const PROBE_PORTS = [8765, 8766]; // ports AnkiConnect usuels, ordre standard
 const PROBE_TIMEOUT_MS = 1500;
 const PORT_KEY = 'ankiPort';             // choix manuel (prioritaire)
 const DETECTED_KEY = 'ankiPortDetected'; // port trouvé automatiquement
@@ -271,18 +270,22 @@ async function getDeckIndex(deck) {
    et même modèle. Aucune heuristique lexicale ici. Une liste vide signifie « doublon
    signalé par Anki mais non localisé », jamais « pas de doublon ». */
 const locateCache = new Map();
-async function locateExact(firstFieldText, modelName) {
+async function locateExact(firstFieldText, modelName, {fresh = false} = {}) {
   const plain = normalizeField(firstFieldText);
   if (!plain) return {matches: [], searched: false};
   const key = modelName + '\u0000' + plain;
-  const hit = locateCache.get(key);
+  const hit = fresh ? null : locateCache.get(key);
   if (hit && Date.now() - hit.time < 60_000) return hit.value;
   let value;
   try {
     const ids = await anki('findNotes', {query: quotedQuery(plain)});
     if (!Array.isArray(ids) || !ids.length) value = {matches: [], searched: true};
-    else {
-      const infos = await anki('notesInfo', {notes: ids.slice(0, MAX_LOCATE_CANDIDATES)});
+    else if (ids.length > MAX_LOCATE_CANDIDATES) {
+      // Trop de candidats pour les examiner TOUS : l'unicité ne peut pas être
+      // prouvée. On refuse de conclure plutôt que d'écraser une note ambiguë.
+      value = {matches: [], searched: true, truncated: true, candidates: ids.length};
+    } else {
+      const infos = await anki('notesInfo', {notes: ids});
       const certain = (Array.isArray(infos)?infos:[]).filter(info => {
         const fields = orderedFields(info);
         return fields.length && normalizeField(fields[0].text) === plain;
@@ -298,20 +301,27 @@ async function locateExact(firstFieldText, modelName) {
           compatible: String(info.modelName||'') === modelName,
           // Instantané : sert à refuser un remplacement si la note a bougé depuis.
           mod: Number(info.mod || 0),
+          // Champs COMPLETS (non tronqués) : ce sont eux qui servent aux
+          // comparaisons. Les versions courtes ci-dessous ne servent qu'à l'affichage.
+          frontFull: plain,
+          secondFull: normalizeField(fields[1]?.text||''),
           second: normalizeField(fields[1]?.text||'').slice(0,4000),
-          front: normalizeField(fields[0]?.text||'').slice(0,240),
+          front: plain.slice(0,240),
           back: normalizeField(fields[1]?.text||'').slice(0,240),
           tags: Array.isArray(info.tags)?info.tags.slice(0,15):[]};
       })};
     }
   } catch { value = {matches: [], searched: false}; }
-  locateCache.set(key, {time: Date.now(), value});
+  if (!fresh) locateCache.set(key, {time: Date.now(), value});
   return value;
 }
 // Indices de texte à trous : {{c1::…}}, {{c2::…}}. Changer l'ENSEMBLE des indices
 // change le nombre de cartes générées par Anki, donc le planning de révision.
+// Un même indice répété (deux {{c1::…}}) ne crée qu'une seule carte : c'est un
+// ENSEMBLE, pas un multiensemble.
 function clozeIndices(text) {
-  return [...String(text ?? '').matchAll(/\{\{c(\d+)::/g)].map(m => Number(m[1])).sort((a, b) => a - b);
+  const all = Array.from(String(text ?? '').matchAll(/\{\{c(\d+)::/g), m => Number(m[1]));
+  return [...new Set(all)].sort((a, b) => a - b);
 }
 
 
@@ -451,12 +461,23 @@ async function replaceNotes(replacements) {
       }
       const deckInfo = (await decksForCardIds(info.cards || []))[noteId];
       const expectedDeck = String(item?.deck || '');
-      if (expectedDeck && deckInfo?.decks?.length && !deckInfo.decks.includes(expectedDeck)) {
-        throw new Error(`La note a été déplacée vers « ${deckInfo.deck} » : remplacement refusé.`);
+      // Comparaison de l'ENSEMBLE des paquets, pas d'une simple appartenance :
+      // une note passée de [A, B] à [A, C] contient encore A mais a bien bougé.
+      const expectedDecks = (Array.isArray(item?.decks) && item.decks.length ? item.decks : (expectedDeck ? [expectedDeck] : [])).map(String);
+      const actualDecks = (deckInfo?.decks || []).map(String);
+      if (expectedDecks.length && actualDecks.length) {
+        const sameSet = expectedDecks.length === actualDecks.length &&
+          [...expectedDecks].sort().join('\u0000') === [...actualDecks].sort().join('\u0000');
+        if (!sameSet) throw new Error(`La note a été déplacée vers « ${deckInfo.deck} » : remplacement refusé.`);
       }
       // Ambiguïté : plusieurs notes du MÊME modèle partagent ce premier champ.
-      // On refuse plutôt que de modifier une note au hasard.
-      const located = await locateExact(fingerprint, expectedModel);
+      // On refuse plutôt que de modifier une note au hasard. La vérification est
+      // refaite SANS cache juste avant l'écriture : une note créée dans Anki
+      // après l'analyse ne doit pas passer entre les mailles.
+      const located = await locateExact(fingerprint, expectedModel, {fresh: true});
+      if (located.truncated) {
+        throw new Error(`Trop de notes partagent ce premier champ (${located.candidates}) pour prouver l'unicité : remplacement refusé.`);
+      }
       const sameModel = located.matches.filter(m => m.model === expectedModel);
       if (sameModel.length > 1) {
         throw new Error(`Plusieurs notes identiques (${sameModel.length}) partagent ce premier champ : remplacement refusé, précise la note dans Anki.`);
