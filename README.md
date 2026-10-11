@@ -30,7 +30,22 @@ Extension navigateur (Manifest V3) qui transforme les cartes générées par Cha
 6. Changer de paquet dans la liste **relance la comparaison automatiquement** ; les conclusions du paquet précédent sont abandonnées et les cartes remises à l'état initial. Le bouton **« Relancer la comparaison »** reste disponible en secours.
 7. Cliquer **« Importer dans Anki »**. Les cartes déjà présentes ne sont jamais réimportées.
 
-Les paquets sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) tout en conservant le nom complet Anki `Parent::Enfant` en interne : un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**.
+Le paquet de destination se **recherche** : taper tout ou partie du nom (la casse, les accents et les ligatures sont ignorés — `coeur` trouve `cœur`). Les résultats sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) alors que la valeur transmise reste le nom complet Anki `Parent::Enfant`. Un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**. Le sélecteur se pilote au clavier (flèches puis Entrée) ; taper ne relance pas la comparaison, seule une **sélection** le fait.
+
+**Sélection des cartes.** Chaque carte se coche ou se décoche individuellement ; deux boutons font **« Tout sélectionner (cartes nouvelles) »** et **« Tout désélectionner »**, et un compteur indique en permanence le nombre de cartes retenues. Après analyse, seules les cartes nouvelles sont cochées : les doublons exacts sont décochés et non réimportables, les formulations proches sont décochées par précaution mais restent réactivables en connaissance de cause.
+
+## Doublons localisés et remplacement
+
+Pour chaque doublon exact, l'extension indique **où la note est rangée** : identifiant, paquet réel (y compris dans une autre spécialité, résolu via `cardsInfo`), modèle et contenu. S'il existe **plusieurs** notes identiques, elles sont toutes listées et aucun remplacement n'est proposé — l'extension ne choisit jamais à votre place.
+
+**Remplacer les notes existantes** est une action distincte de l'import, jamais automatique :
+
+- proposée uniquement pour une note **certaine** (même premier champ, **même modèle**, match unique dans la collection) ; une ressemblance lexicale ne suffit jamais ;
+- chaque remplacement est **sélectionné explicitement** (aucun par défaut), avec un aperçu avant → après des seuls champs qui changent ;
+- une **confirmation** rappelle le nombre de notes, le paquet d'origine et le fait que le contenu actuel sera écrasé ; **Annuler n'écrit rien** ;
+- l'écriture utilise `updateNoteFields` : l'**identifiant de note, le paquet, le planning de révision et les tags sont conservés**. Aucune suppression, aucun déplacement, aucune modification de tag ;
+- la note est **relue juste avant l'écriture** : si le premier champ, le second champ, le modèle, le paquet ou l'horodatage `mod` ont changé depuis l'analyse, le remplacement est refusé ;
+- pour un texte à trous, si le nombre d'indices `{{c1}}`/`{{c2}}` change, le remplacement est refusé (cela modifierait le nombre de cartes et donc le planning).
 
 **Mode de secours (indépendant du bouton).** Si le bouton d'import n'apparaît pas (par exemple après un changement d'interface de ChatGPT), copier le bloc JSON, ouvrir l'icône de l'extension, coller le JSON dans la zone de texte, puis **1. Vérifier les doublons** → **2. Importer la sélection**. Ce mode fonctionne même quand la détection automatique est cassée.
 

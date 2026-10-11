@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cartes vers Anki",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "Crée et importe des cartes de ChatGPT dans Anki, sans copie de JSON, avec contrôle des doublons.",
   "permissions": [
     "storage"
