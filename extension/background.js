@@ -15,14 +15,16 @@ function validatedPort(value) {
 
    1) Port fixé explicitement dans le popup  → prioritaire, toujours respecté.
    2) Port déjà détecté automatiquement      → réutilisé s'il répond encore.
-   3) Sinon, sonde des ports usuels (8765, puis 8766).
+   3) Sinon, sonde des ports usuels. Ici 8766 (Anki) est essayé AVANT 8765, car
+      sur cette machine 8765 est occupé par Hermes Office 3D (voir
+      ~/Projects/PORT_REGISTRY.md) ; 8765 reste en second pour AnkiConnect standard.
 
    La sonde n'accepte qu'un service qui se comporte réellement comme AnkiConnect
    (HTTP 200, JSON {result, error}, action « version ») avec un délai court.
    Un port occupé par un autre logiciel est écarté sans lui envoyer la moindre
    écriture : l'extension ne parle qu'à un service identifié comme AnkiConnect.
 --------------------------------------------------------------------------- */
-const PROBE_PORTS = [8765, 8766];
+const PROBE_PORTS = [8766, 8765]; // Anki d'abord ; 8765 est pris par Hermes Office 3D sur ce Mac
 const PROBE_TIMEOUT_MS = 1500;
 const PORT_KEY = 'ankiPort';             // choix manuel (prioritaire)
 const DETECTED_KEY = 'ankiPortDetected'; // port trouvé automatiquement
@@ -145,6 +147,44 @@ function plainToHtml(text) {
 function normalizeTag(s) {
   return String(s).trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-À-ÿ]/g, '').slice(0, 40);
 }
+/* Anki range du HTML dans les champs. Pour comparer deux contenus (clé de doublon,
+   détection de dérive depuis l'analyse) on retire les balises et on normalise les
+   espaces : c'est la même base que la détection de doublon d'Anki sur le premier champ. */
+function fieldPlain(text) {
+  return String(text ?? '')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:div|p|li|tr)>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&amp;/gi, '&');
+}
+function normalizeField(text) {
+  return fieldPlain(text).replace(/\s+/g, ' ').trim();
+}
+// Champs d'une note dans l'ordre du modèle : l'index 0 est le « recto ».
+function orderedFields(info) {
+  return Object.entries(info?.fields || {})
+    .map(([name, v]) => ({name, order: Number(v?.order ?? 0), text: String(v?.value ?? '')}))
+    .sort((a, b) => a.order - b.order);
+}
+/* AnkiConnect ne donne pas le paquet dans notesInfo : il faut cardsInfo. Une note
+   peut avoir plusieurs cartes (texte à trous) : on conserve TOUS les paquets
+   rencontrés pour ne jamais affirmer un emplacement approximatif. */
+async function decksForCardIds(cardIds) {
+  const unique = [...new Set((Array.isArray(cardIds) ? cardIds : []).map(Number).filter(Number.isFinite))].slice(0, 500);
+  const found = {};
+  for (let i = 0; i < unique.length; i += SCAN_BATCH) {
+    const infos = await anki('cardsInfo', {cards: unique.slice(i, i + SCAN_BATCH)});
+    for (const c of (Array.isArray(infos) ? infos : [])) {
+      const note = Number(c?.note);
+      if (!Number.isFinite(note)) continue;
+      (found[note] = found[note] || new Set()).add(String(c?.deckName || ''));
+    }
+  }
+  const out = {};
+  for (const [note, decks] of Object.entries(found)) out[note] = {deck: [...decks][0] || '', decks: [...decks]};
+  return out;
+}
+
 async function findModel(type, available) {
   const candidates = type === 'cloze'
     ? [/^cloze$/i, /texte.*trou/i, /cloze/i]
@@ -205,6 +245,8 @@ async function importCards(deckName, cards) {
 // Détection lexicale : notes du paquet choisi (et sous-paquets), sans serveur externe.
 const MAX_SIMILARITY_SCAN = 20000;
 const SCAN_BATCH = 200;
+const MAX_LOCATE = 100;           // couvre un lot complet (1–100) : aucun doublon non localisé
+const MAX_LOCATE_CANDIDATES = 60; // notes examinées par recherche de doublon
 let lastIndex = null;
 async function getDeckIndex(deck) {
   if (lastIndex?.deck === deck && Date.now()-lastIndex.time < 60_000) return lastIndex;
@@ -212,14 +254,67 @@ async function getDeckIndex(deck) {
   const ids=await anki('findNotes', {query});
   if (!Array.isArray(ids)) throw new Error('Recherche Anki invalide.');
   const capped=ids.slice(0,MAX_SIMILARITY_SCAN);
-  const notes=[];
+  const notes=[]; const cards={};
   for(let i=0;i<capped.length;i+=SCAN_BATCH) {
     const info=await anki('notesInfo',{notes:capped.slice(i,i+SCAN_BATCH)});
-    notes.push(...info.map(AnkiSearch.sanitizeResult));
+    for(const item of (Array.isArray(info)?info:[])) {
+      const clean=AnkiSearch.sanitizeResult(item);
+      notes.push(clean);
+      cards[clean.id]=Array.isArray(item.cards)?item.cards:[];
+    }
   }
-  lastIndex={deck,time:Date.now(),notes,total:ids.length,partial:ids.length>MAX_SIMILARITY_SCAN};
+  lastIndex={deck,time:Date.now(),notes,cards,total:ids.length,partial:ids.length>MAX_SIMILARITY_SCAN};
   return lastIndex;
 }
+
+/* Localisation d'un doublon CERTAIN : même premier champ (la clé de doublon d'Anki)
+   et même modèle. Aucune heuristique lexicale ici. Une liste vide signifie « doublon
+   signalé par Anki mais non localisé », jamais « pas de doublon ». */
+const locateCache = new Map();
+async function locateExact(firstFieldText, modelName) {
+  const plain = normalizeField(firstFieldText);
+  if (!plain) return {matches: [], searched: false};
+  const key = modelName + '\u0000' + plain;
+  const hit = locateCache.get(key);
+  if (hit && Date.now() - hit.time < 60_000) return hit.value;
+  let value;
+  try {
+    const ids = await anki('findNotes', {query: quotedQuery(plain)});
+    if (!Array.isArray(ids) || !ids.length) value = {matches: [], searched: true};
+    else {
+      const infos = await anki('notesInfo', {notes: ids.slice(0, MAX_LOCATE_CANDIDATES)});
+      const certain = (Array.isArray(infos)?infos:[]).filter(info => {
+        const fields = orderedFields(info);
+        return fields.length && normalizeField(fields[0].text) === plain;
+      });
+      const cardIds = [];
+      for (const info of certain) for (const c of (info.cards||[])) cardIds.push(c);
+      const decks = await decksForCardIds(cardIds);
+      value = {searched: true, matches: certain.map(info => {
+        const fields = orderedFields(info);
+        const d = decks[Number(info.noteId)] || {deck:'', decks:[]};
+        return {id: Number(info.noteId), model: String(info.modelName||''),
+          deck: d.deck, decks: d.decks, certain: true,
+          compatible: String(info.modelName||'') === modelName,
+          // Instantané : sert à refuser un remplacement si la note a bougé depuis.
+          mod: Number(info.mod || 0),
+          second: normalizeField(fields[1]?.text||'').slice(0,4000),
+          front: normalizeField(fields[0]?.text||'').slice(0,240),
+          back: normalizeField(fields[1]?.text||'').slice(0,240),
+          tags: Array.isArray(info.tags)?info.tags.slice(0,15):[]};
+      })};
+    }
+  } catch { value = {matches: [], searched: false}; }
+  locateCache.set(key, {time: Date.now(), value});
+  return value;
+}
+// Indices de texte à trous : {{c1::…}}, {{c2::…}}. Changer l'ENSEMBLE des indices
+// change le nombre de cartes générées par Anki, donc le planning de révision.
+function clozeIndices(text) {
+  return [...String(text ?? '').matchAll(/\{\{c(\d+)::/g)].map(m => Number(m[1])).sort((a, b) => a - b);
+}
+
+
 async function analyzeCards(deck,cards) {
   if(!Array.isArray(cards) || cards.length<1 || cards.length>100)throw new Error('Lot invalide (1–100 cartes).');
   const decks=await anki('deckNames');
@@ -242,8 +337,156 @@ async function analyzeCards(deck,cards) {
   });
   const addable=await anki('canAddNotes',{notes:candidateNotes});
   const idx=await getDeckIndex(deck);
-  return {items:AnkiSimilarity.analyze(cards,idx.notes,addable),totalExisting:idx.total,
-    scanned:idx.notes.length,partial:idx.partial,scope:deck};
+  const base=AnkiSimilarity.analyze(cards,idx.notes,addable);
+  // Cartes répétées dans le lot : doublon interne, sans note Anki à localiser.
+  const sigs=cards.map(c=>AnkiSimilarity.normalize(c.type==='cloze'?c.text:c.front));
+  const repeated=sigs.map((s,i)=>sigs.indexOf(s)!==i);
+  // Ressemblances lexicales : on joint paquet et modèle, jamais présentés comme certains.
+  const similarIds=[];
+  base.forEach(it=>{ if(it.kind==='similar') for(const m of it.matches) similarIds.push(m.id); });
+  const similarDecks=similarIds.length?await decksForCardIds(similarIds.flatMap(id=>idx.cards[id]||[])):{};
+  const byId=new Map(idx.notes.map(n=>[n.id,n]));
+  const items=[];
+  let locatedCount=0;
+  for(let i=0;i<cards.length;i++){
+    const item=base[i];
+    if(item.kind==='new'){
+      items.push({kind:'new',duplicates:[],replaceable:false,blocked:null,
+        note:'Aucun doublon détecté dans la zone analysée.'});
+      continue;
+    }
+    if(item.kind==='similar'){
+      const duplicates=item.matches.map(m=>{
+        const note=byId.get(m.id);
+        const d=similarDecks[m.id]||{deck:'',decks:[]};
+        return {id:m.id,model:String(note?.model||''),deck:d.deck,decks:d.decks,certain:false,
+          compatible:false,score:m.score,front:m.front,
+          back:String(note?.fields?.[1]?.text||'').slice(0,240),tags:note?.tags||[]};
+      });
+      items.push({kind:'similar',duplicates,replaceable:false,blocked:null,
+        note:'Formulation proche : ressemblance lexicale, pas une preuve d\'équivalence.'});
+      continue;
+    }
+    if(repeated[i]){
+      items.push({kind:'exact',duplicates:[],replaceable:false,blocked:'interne-au-lot',
+        note:'Carte répétée dans ce lot : une seule copie sera importée.'});
+      continue;
+    }
+    if(locatedCount>=MAX_LOCATE){
+      items.push({kind:'exact',duplicates:[],replaceable:false,blocked:'limite',
+        note:'Doublon déjà présent dans la collection (localisation non effectuée : limite atteinte).'});
+      continue;
+    }
+    locatedCount++;
+    const first=cards[i].type==='cloze'?cards[i].text:cards[i].front;
+    const res=await locateExact(first, modelMap[cards[i].type].model);
+    const duplicates=res.matches;
+    if(!duplicates.length){
+      items.push({kind:'exact',duplicates:[],replaceable:false,
+        blocked:res.searched?'non-localise':'recherche-impossible',
+        note:'Doublon déjà présent dans la collection, emplacement non déterminé : remplacement non proposé.'});
+      continue;
+    }
+    const compatibles=duplicates.filter(d=>d.compatible);
+    const blocked = duplicates.length>1 ? 'ambigu' : (compatibles.length ? null : 'incompatible');
+    items.push({kind:'exact',duplicates,replaceable:blocked===null,blocked,
+      note: blocked==='ambigu'
+        ? 'Plusieurs notes identiques trouvées : remplacement bloqué, choisis la note exacte dans Anki.'
+        : blocked==='incompatible'
+          ? 'Note identique trouvée mais modèle différent : remplacement refusé.'
+          : 'Doublon exact déjà présent dans la collection : ignoré à l\'import.'});
+  }
+  return {items,totalExisting:idx.total,scanned:idx.notes.length,partial:idx.partial,scope:deck};
+}
+
+/* Remplacement du contenu de notes EXISTANTES, sans suppression ni recréation.
+   - updateNoteFields uniquement : identifiant de note, paquet, planning et
+     historique de révision sont conservés ; les tags ne sont jamais modifiés
+     (aucune clé « tags » n'est transmise à AnkiConnect).
+   - Concurrence optimiste (anti-TOCTOU) : la note est relue juste avant écriture
+     et le remplacement est refusé si le modèle, le premier champ, le second champ,
+     l'horodatage « mod » ou le paquet diffèrent de l'instantané de l'analyse.
+   - Modèle comparé à l'identique : « Basique » et « Basique (carte inversée
+     optionnelle) » partagent le même premier champ mais ne sont PAS interchangeables.
+   - Texte à trous : si l'ensemble des indices {{c1}}/{{c2}} change, le nombre de
+     cartes générées changerait aussi → remplacement refusé.
+   - Les champs sont appliqués par POSITION (recto = champ 0, verso = champ 1), donc
+     un modèle aux champs nommés différemment est traité correctement et les champs
+     supplémentaires ne sont pas touchés. */
+async function replaceNotes(replacements) {
+  if (!Array.isArray(replacements) || !replacements.length) throw new Error('Aucun remplacement sélectionné.');
+  if (replacements.length > 100) throw new Error('Remplacement limité à 100 notes par lot.');
+  const models = await anki('modelNames');
+  const result = {updated: 0, skipped: 0, skippedDetails: [], failed: [], total: replacements.length};
+  for (const item of replacements) {
+    const noteId = Number(item?.noteId);
+    try {
+      if (!Number.isSafeInteger(noteId) || noteId <= 0) throw new Error('Identifiant de note invalide.');
+      // Défense en profondeur : aucune écriture de tags ou de paquet n'est acceptée.
+      if (item && ('tags' in item || 'deckName' in item)) throw new Error('Données non autorisées dans la demande de remplacement.');
+      const expectedModel = String(item?.model || '');
+      const fingerprint = normalizeField(item?.fingerprint || '');
+      const type = String(item?.type || '');
+      if (!expectedModel || !fingerprint) throw new Error('Données de remplacement incomplètes.');
+      if (type !== 'basic' && type !== 'cloze') throw new Error('Type de carte non précisé.');
+      if (!models.includes(expectedModel)) throw new Error(`Le modèle « ${expectedModel} » n'existe plus dans Anki.`);
+      const infos = await anki('notesInfo', {notes: [noteId]});
+      const info = Array.isArray(infos) ? infos[0] : null;
+      if (!info) throw new Error('La note n\'existe plus dans Anki.');
+      // Modèle à l'identique : un modèle voisin (carte inversée, saisie de réponse…)
+      // partage le même premier champ mais change la mécanique de révision.
+      if (String(info.modelName) !== expectedModel) {
+        throw new Error(`Modèle différent de celui comparé (${info.modelName}) : remplacement refusé.`);
+      }
+      const fields = orderedFields(info);
+      if (fields.length < 2) throw new Error('Note sans champs recto/verso exploitables.');
+      if (normalizeField(fields[0].text) !== fingerprint) {
+        throw new Error('Le premier champ a changé depuis la comparaison : remplacement refusé.');
+      }
+      if (item.originalSecond !== undefined && normalizeField(fields[1].text) !== normalizeField(item.originalSecond)) {
+        throw new Error('Le second champ a changé depuis la comparaison : remplacement refusé.');
+      }
+      if (item.mod !== undefined && Number(item.mod) !== Number(info.mod || 0)) {
+        throw new Error('La note a été modifiée dans Anki depuis la comparaison : remplacement refusé.');
+      }
+      const deckInfo = (await decksForCardIds(info.cards || []))[noteId];
+      const expectedDeck = String(item?.deck || '');
+      if (expectedDeck && deckInfo?.decks?.length && !deckInfo.decks.includes(expectedDeck)) {
+        throw new Error(`La note a été déplacée vers « ${deckInfo.deck} » : remplacement refusé.`);
+      }
+      // Ambiguïté : plusieurs notes du MÊME modèle partagent ce premier champ.
+      // On refuse plutôt que de modifier une note au hasard.
+      const located = await locateExact(fingerprint, expectedModel);
+      const sameModel = located.matches.filter(m => m.model === expectedModel);
+      if (sameModel.length > 1) {
+        throw new Error(`Plusieurs notes identiques (${sameModel.length}) partagent ce premier champ : remplacement refusé, précise la note dans Anki.`);
+      }
+      const wanted = [item?.first, item?.second].map(v => plainToHtml(String(v ?? '')));
+      if (type === 'cloze') {
+        const before = clozeIndices(fieldPlain(fields[0].text)).join(',');
+        const after = clozeIndices(fieldPlain(wanted[0])).join(',');
+        if (before !== after) {
+          throw new Error('Le nombre de textes à trous change : le nombre de cartes et le planning seraient modifiés, remplacement refusé.');
+        }
+      }
+      const updates = {};
+      if (normalizeField(fields[0].text) !== normalizeField(wanted[0])) updates[fields[0].name] = wanted[0];
+      if (normalizeField(fields[1].text) !== normalizeField(wanted[1])) updates[fields[1].name] = wanted[1];
+      // Aucun champ ne diffère : rien à écrire, et surtout pas une écriture inutile.
+      if (!Object.keys(updates).length) {
+        result.skipped++;
+        result.skippedDetails.push({noteId, reason: 'Aucun champ ne diffère : note laissée intacte.'});
+        continue;
+      }
+      await anki('updateNoteFields', {note: {id: noteId, fields: updates}});
+      result.updated++;
+    } catch (e) {
+      result.failed.push({noteId: Number.isFinite(noteId) ? noteId : null, reason: String(e?.message || e)});
+    }
+  }
+  lastIndex = null;
+  locateCache.clear();
+  return result;
 }
 
 // Recherche côté Anki : les données ne sont jamais envoyées à un serveur tiers.
@@ -287,12 +530,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.storage.local.remove(DETECTED_KEY);
         invalidatePort();
         lastIndex = null;
+        locateCache.clear();
         return port;
       }
       case 'CLEAR_PORT': {
         await chrome.storage.local.remove([PORT_KEY, DETECTED_KEY]);
         invalidatePort();
         lastIndex = null;
+        locateCache.clear();
         return await currentPort();
       }
       case 'CONNECT': {
@@ -306,6 +551,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ANALYZE': return await analyzeCards(message.deck,message.cards);
       case 'PING': return await anki('version');
       case 'IMPORT': return await importCards(message.deck, message.cards);
+      case 'REPLACE': return await replaceNotes(message.replacements);
       default: throw new Error('Action non autorisée.');
     }
   })().then(value => sendResponse({ok:true,value}))

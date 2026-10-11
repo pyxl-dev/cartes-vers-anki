@@ -1,3 +1,69 @@
+/* ---------------------------------------------------------------------------
+   Styles de la fenêtre d'import. Tout est préfixé .ankibridge- pour ne jamais
+   interférer avec ChatGPT. Les couleurs sont fixes (clair) pour rester lisibles
+   sur les thèmes clairs comme sombres.
+--------------------------------------------------------------------------- */
+.ankibridge-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:2147483600;
+  display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto}
+.ankibridge-dialog{background:#fff;color:#111827;border-radius:14px;width:min(860px,100%);
+  box-shadow:0 20px 50px rgba(0,0,0,.35);font:14px/1.5 system-ui;display:flex;flex-direction:column;max-height:92vh}
+.ankibridge-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 16px;border-bottom:1px solid #e5e7eb}
+.ankibridge-head h2{margin:0;font-size:16px}
+.ankibridge-close{background:none;border:0;font-size:22px;line-height:1;cursor:pointer;color:#6b7280;padding:0 6px}
+.ankibridge-main{padding:12px 16px;overflow:auto}
+.ankibridge-control{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ankibridge-decklabel{font-weight:600;padding-top:7px}
+.ankibridge-combo{position:relative;flex:1 1 320px;min-width:240px}
+.ankibridge-deckinput{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}
+.ankibridge-decklist{position:absolute;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;
+  background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 24px rgba(0,0,0,.18);
+  max-height:260px;overflow:auto;z-index:5}
+.ankibridge-decklist[hidden]{display:none}
+.ankibridge-deckoption{padding:6px 8px;border-radius:6px;cursor:pointer}
+.ankibridge-deckoption:hover,.ankibridge-deckoption.active{background:#eef2ff}
+.ankibridge-deckoption[aria-selected="true"]{font-weight:600}
+.ankibridge-deckempty,.ankibridge-deckmore{padding:6px 8px;color:#6b7280;font-size:13px}
+.ankibridge-review{background:#eef2ff;border:1px solid #c7d2fe;color:#1e3a8a;border-radius:8px;padding:7px 12px;font:600 12px system-ui;cursor:pointer}
+.ankibridge-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.ankibridge-bulk button{background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font:600 12px system-ui;cursor:pointer}
+.ankibridge-count{color:#374151;font-size:13px;font-weight:600}
+.ankibridge-card{border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;margin-bottom:8px;background:#fafafa}
+.ankibridge-card summary{cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px}
+.ankibridge-pick{width:16px;height:16px;flex:none;cursor:pointer}
+.ankibridge-card label{display:block;margin-top:8px;font-size:12px;color:#374151;font-weight:600}
+.ankibridge-card textarea{width:100%;box-sizing:border-box;min-height:52px;margin-top:3px;padding:6px 8px;
+  border:1px solid #cbd5e1;border-radius:8px;font:13px/1.4 system-ui;resize:vertical}
+.ankibridge-notice{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px;background:#f1f5f9;color:#334155}
+.ankibridge-notice.exact{background:#fee2e2;color:#7f1d1d}
+.ankibridge-notice.similar{background:#fef3c7;color:#78350f}
+.ankibridge-notice.new{background:#dcfce7;color:#14532d}
+.ankibridge-dup{margin-top:6px;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,.7);color:#1f2937}
+.ankibridge-duphead{font-weight:600;margin:2px 0}
+.ankibridge-dupfield{margin:2px 0;font-size:12px}
+.ankibridge-dupnote{margin:6px 0 0;font-size:12px;font-style:italic}
+.ankibridge-replacerow:empty{display:none}
+.ankibridge-replacebox{margin-top:10px;padding:10px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff}
+.ankibridge-replacepick{display:flex!important;align-items:flex-start;gap:8px;font-weight:600;color:#1e3a8a}
+.ankibridge-replacepick input{width:16px;height:16px;flex:none;margin-top:2px}
+.ankibridge-replacehint{margin:6px 0 0;font-size:12px;color:#1e40af}
+.ankibridge-diff{margin-top:8px;padding:8px;border-radius:6px;background:#fff;border:1px dashed #93c5fd;font-size:12px}
+.ankibridge-difftitle{margin:0 0 4px;font-weight:600}
+.ankibridge-diffline{margin:2px 0;color:#7f1d1d;word-break:break-word}
+.ankibridge-diffline.after{color:#14532d}
+.ankibridge-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 16px;border-top:1px solid #e5e7eb;flex-wrap:wrap}
+.ankibridge-msg{font-size:12px;color:#374151;flex:1 1 240px;white-space:pre-wrap}
+.ankibridge-action{background:#166534;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:600 13px system-ui;cursor:pointer}
+.ankibridge-action:disabled{background:#9ca3af;cursor:not-allowed}
+.ankibridge-replace{background:#1d4ed8;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:600 13px system-ui;cursor:pointer}
+.ankibridge-replace:disabled{background:#9ca3af;cursor:not-allowed}
+.ankibridge-confirm{margin:12px 16px;padding:12px;border:1px solid #fca5a5;border-radius:10px;background:#fef2f2}
+.ankibridge-confirm h3{margin:0 0 6px;font-size:14px;color:#7f1d1d}
+.ankibridge-confirm p{margin:3px 0;font-size:13px;color:#450a0a}
+.ankibridge-confirmactions{display:flex;gap:8px;margin-top:10px}
+.ankibridge-confirmok{background:#b91c1c;color:#fff;border:0;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
+.ankibridge-cancel{background:#e5e7eb;color:#111827;border:0;border-radius:8px;padding:8px 12px;font:600 13px system-ui;cursor:pointer}
 /* Conteneur du bouton. Un bouton inséré directement après <pre> devient une 2e
    colonne étirée quand ChatGPT place le bloc de code dans une grille ou un flex.
    Ce bloc est donc un élément à part entière : pleine largeur, jamais étiré en

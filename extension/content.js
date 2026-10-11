@@ -75,6 +75,134 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+  // Comparaison insensible à la casse ET aux accents, sur le chemin complet.
+  // Les ligatures (œ, æ) sont dépliées : « coeur » doit trouver « cœur ».
+  const normText = s => String(s ?? '').replace(/œ/gi, 'oe').replace(/æ/gi, 'ae')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // AnkiConnect renvoie « Parent::Enfant ». On n'affiche qu'un libellé lisible ;
+  // la valeur transmise reste EXACTEMENT le nom complet du paquet.
+  const deckLabel = name => String(name).split('::').map(s => s.trim()).filter(Boolean).join(' › ');
+  const MAX_OPTIONS = 50;
+  /* Choix de paquet RECHERCHABLE : combobox accessible (rôle combobox + listbox).
+     Taper filtre la liste ; seule une sélection réelle (clic ou Entrée) appelle
+     onChoose, donc l'analyse ne se relance jamais à chaque caractère. */
+  function createDeckPicker(names, onChoose) {
+    let pool = Array.isArray(names) ? names : [];
+    const root = el('div','ankibridge-combo');
+    const input = el('input','ankibridge-deckinput');
+    input.type = 'text';
+    input.setAttribute('role','combobox');
+    input.setAttribute('aria-expanded','false');
+    input.setAttribute('aria-autocomplete','list');
+    input.setAttribute('aria-label','Rechercher un paquet Anki');
+    input.setAttribute('autocomplete','off');
+    input.setAttribute('placeholder','Tape un mot du paquet…');
+    const list = el('ul','ankibridge-decklist');
+    list.setAttribute('role','listbox');
+    list.hidden = true;
+    root.append(input, list);
+    let current = '';
+    let shown = [];
+    let active = -1;
+    let seq = 0;
+    function filtered(query) {
+      const words = normText(query).split(/\s+/).filter(Boolean);
+      if (!words.length) return pool.slice();
+      return pool.filter(name => {
+        const hay = normText(name).replace(/::/g, ' ');
+        return words.every(w => hay.includes(w));
+      });
+    }
+    function paint(query) {
+      const found = filtered(query);
+      shown = found.slice(0, MAX_OPTIONS);
+      list.replaceChildren();
+      if (!shown.length) {
+        const empty = el('li','ankibridge-deckempty','Aucun résultat');
+        empty.setAttribute('role','presentation');
+        list.append(empty);
+      } else {
+        shown.forEach(name => {
+          const li = el('li','ankibridge-deckoption', deckLabel(name));
+          li.setAttribute('role','option');
+          li.setAttribute('aria-selected', name === current ? 'true' : 'false');
+          li.setAttribute('id', 'ankibridge-opt-' + (++seq));
+          li.dataset.value = name;
+          li.addEventListener('mousedown', e => e.preventDefault());
+          li.onclick = () => choose(name);
+          list.append(li);
+        });
+        if (found.length > shown.length) {
+          const more = el('li','ankibridge-deckmore', `${found.length - shown.length} autre(s) paquet(s) — précise la recherche`);
+          more.setAttribute('role','presentation');
+          list.append(more);
+        }
+      }
+      active = -1;
+      input.removeAttribute('aria-activedescendant');
+    }
+    function highlight() {
+      const opts = list.querySelectorAll('.ankibridge-deckoption');
+      opts.forEach((n, i) => { n.classList.remove('active'); if (i === active) n.classList.add('active'); });
+      if (opts[active]) input.setAttribute('aria-activedescendant', opts[active].getAttribute('id') || '');
+      else input.removeAttribute('aria-activedescendant');
+    }
+    function open() {
+      if (!list.hidden) return;
+      list.hidden = false;
+      input.setAttribute('aria-expanded','true');
+      paint(input.value === deckLabel(current) ? '' : input.value);
+    }
+    function close() {
+      list.hidden = true;
+      input.setAttribute('aria-expanded','false');
+      active = -1;
+      input.removeAttribute('aria-activedescendant');
+    }
+    function choose(name) {
+      current = name;
+      input.value = deckLabel(name);
+      close();
+      onChoose(name);
+    }
+    input.addEventListener('input', () => { open(); paint(input.value); });
+    input.addEventListener('focus', open);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (list.hidden) { open(); return; }
+        if (!shown.length) return;
+        active = e.key === 'ArrowDown' ? (active + 1) % shown.length : (active <= 0 ? shown.length - 1 : active - 1);
+        highlight();
+      } else if (e.key === 'Enter') {
+        if (!list.hidden && shown.length) { e.preventDefault(); choose(shown[active >= 0 ? active : 0]); }
+      } else if (e.key === 'Escape') {
+        if (!list.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
+      } else if (e.key === 'Tab') { close(); }
+    });
+    return {
+      root, input, close,
+      get value() { return current; },
+      setValue(name) { current = name; input.value = deckLabel(name); close(); },
+      setNames(next) { pool = Array.isArray(next) ? next : []; }
+    };
+  }
+  // Confirmation dans la page (pas de fenêtre native) : annuler ne déclenche rien.
+  function askConfirm(dialog, title, lines) {
+    return new Promise(resolve => {
+      const box = el('div','ankibridge-confirm');
+      box.setAttribute('role','alertdialog');
+      box.append(el('h3','',title));
+      for (const line of lines) box.append(el('p','',line));
+      const actions = el('div','ankibridge-confirmactions');
+      const ok = el('button','ankibridge-confirmok','Confirmer le remplacement');
+      const cancel = el('button','ankibridge-cancel','Annuler');
+      ok.type = 'button'; cancel.type = 'button';
+      ok.onclick = () => { box.remove(); resolve(true); };
+      cancel.onclick = () => { box.remove(); resolve(false); };
+      actions.append(ok, cancel); box.append(actions); dialog.append(box);
+    });
+  }
   async function showModal(cards) {
     document.querySelector('.ankibridge-overlay')?.remove();
     const overlay = el('div','ankibridge-overlay');
@@ -85,17 +213,24 @@
     head.append(close); dialog.append(head);
     const main = el('div','ankibridge-main');
     const control = el('div','ankibridge-control');
-    control.append(el('span','', 'Paquet Anki :'));
-    const select=el('select'); select.setAttribute('aria-label','Paquet Anki');
-    const placeholder=el('option','', 'Chargement des paquets...'); placeholder.value=''; select.append(placeholder);
-    const analyze=el('button','ankibridge-review','Relancer la comparaison');
+    control.append(el('span','ankibridge-decklabel','Paquet Anki :'));
+    const picker = createDeckPicker([], name => onDeckSelected(name));
+    const analyze = el('button','ankibridge-review','Relancer la comparaison');
     analyze.type='button'; analyze.disabled=true;
-    control.append(select,analyze); main.append(control);
+    control.append(picker.root, analyze); main.append(control);
+    // Sélection en masse : les cartes déjà présentes ne sont jamais cochées par défaut.
+    const bulk = el('div','ankibridge-bulk');
+    const selectNew = el('button','ankibridge-selectnew','Tout sélectionner (cartes nouvelles)');
+    const selectNone = el('button','ankibridge-selectnone','Tout désélectionner');
+    const count = el('span','ankibridge-count','0 sélectionnée(s)');
+    selectNew.type='button'; selectNone.type='button';
+    bulk.append(selectNew, selectNone, count); main.append(bulk);
     const entries=[];
     cards.forEach((card,i)=>{
       const details=el('details','ankibridge-card');
       const summary=el('summary');
-      const check=el('input'); check.type='checkbox'; check.checked=true;
+      const check=el('input'); check.type='checkbox'; check.checked=true; check.className='ankibridge-pick';
+      check.setAttribute('aria-label',`Sélectionner la carte ${i+1}`);
       check.addEventListener('click', e=>e.stopPropagation());
       summary.append(check, document.createTextNode(` ${i+1}. ${card.type==='cloze'?'[Texte à trous] ':''}${(card.front||card.text).slice(0,115)}`));
       details.append(summary);
@@ -105,11 +240,15 @@
       const first=el('textarea'); first.value=card.type==='cloze'?card.text:card.front; firstLabel.append(first);
       const secondLabel=el('label','',card.type==='cloze'?'Précisions facultatives':'Réponse');
       const second=el('textarea'); second.value=card.type==='cloze'?card.extra:card.back; secondLabel.append(second);
-      details.append(firstLabel,secondLabel); main.append(details);
-      entries.push({card,check,first,second,notice,details});
+      details.append(firstLabel,secondLabel);
+      // Bloc « remplacer » : vide tant qu'aucune note certaine n'est identifiée.
+      const replaceRow=el('div','ankibridge-replacerow'); details.append(replaceRow);
+      main.append(details);
+      entries.push({card,check,first,second,notice,details,replaceRow,replace:null,item:null,kind:null});
     });
     dialog.append(main);
     const foot=el('div','ankibridge-foot'); const msg=el('span','ankibridge-msg','Anki doit être ouvert. Aucune donnée ne part vers un service tiers.');
+    const replaceBtn=el('button','ankibridge-replace','Remplacer les notes existantes'); replaceBtn.type='button'; replaceBtn.disabled=true;
     const save=el('button','ankibridge-action','Importer dans Anki'); save.type='button'; save.disabled=true;
     const currentCards=()=>entries.map(e=>({
       ...e.card,
@@ -121,50 +260,114 @@
     let lastReport=null;
     let analysisSeq=0;      // jeton anti-course : tout résultat périmé est ignoré
     let debounceTimer=null;
-    // AnkiConnect renvoie des chemins complets « Parent::Enfant ». On n'affiche qu'un
-    // libellé lisible ; la valeur de l'option reste EXACTEMENT le nom complet.
-    const deckLabel=name=>String(name).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+    const updateCount=()=>{
+      const n=entries.filter(e=>e.check.checked).length;
+      count.textContent=`${n} sélectionnée(s) sur ${entries.length}`;
+    };
+    const updateReplaceState=()=>{
+      const n=entries.filter(e=>e.replace?.checked).length;
+      replaceBtn.disabled = !verified || n===0;
+      replaceBtn.textContent = n ? `Remplacer ${n} note(s) existante(s)` : 'Remplacer les notes existantes';
+    };
+    for(const e of entries) e.check.addEventListener('change',()=>{updateCount();updateReplaceState();});
+    selectNew.onclick=()=>{for(const e of entries)e.check.checked=(e.kind==='new');updateCount();updateReplaceState();};
+    selectNone.onclick=()=>{for(const e of entries)e.check.checked=false;updateCount();updateReplaceState();};
     const invalidate=({resetChecks=false,why}={})=>{revision++;analysisSeq++;verified=false;lastReport=null;save.disabled=true;
       if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
+      for(const e of entries){e.replaceRow.replaceChildren();e.replace=null;}
+      replaceBtn.disabled=true; replaceBtn.textContent='Remplacer les notes existantes';
       msg.textContent=why||'Cartes modifiées : relancer la comparaison avant import.';
       for(const e of entries)e.notice.textContent='Non vérifié depuis la dernière modification.';
+      updateCount();
     };
     for(const e of entries){e.first.addEventListener('input',()=>invalidate());e.second.addEventListener('input',()=>invalidate());}
+    // Détail d'un doublon : identifiant, paquet EXACT (même hors de la spécialité
+    // choisie) et modèle. Plusieurs résultats sont TOUS listés, jamais arbitrés.
+    const duplicateBlock=item=>{
+      const box=el('div','ankibridge-dup');
+      for(const d of item.duplicates){
+        const where=d.deck?`paquet « ${deckLabel(d.deck)} »`:'paquet inconnu';
+        const head=el('p','ankibridge-duphead',`Note #${d.id} — ${where}${d.model?` (modèle ${d.model})`:''}`+
+          (d.certain?'':' — ressemblance, non certaine')+(d.score!=null?` (${Math.round(d.score*100)} % lexical)`:'')); 
+        box.append(head);
+        box.append(el('p','ankibridge-dupfield',`Recto : ${d.front||'(vide)'}`));
+        if(d.back)box.append(el('p','ankibridge-dupfield',`Verso : ${d.back}`));
+        if(Array.isArray(d.tags)&&d.tags.length)box.append(el('p','ankibridge-dupfield',`Tags : ${d.tags.join(', ')}`));
+      }
+      return box;
+    };
+    // Bloc de remplacement : proposé UNIQUEMENT pour une note certaine, unique et
+    // de modèle compatible. Rien n'est coché par défaut.
+    const buildReplaceRow=(e,item)=>{
+      e.replaceRow.replaceChildren();
+      e.replace=null;
+      if(!item.replaceable||item.duplicates.length!==1)return;
+      const m=item.duplicates[0];
+      const wanted=[e.first.value.trim(),e.second.value.trim()];
+      const changes=[];
+      if((m.front||'')!==wanted[0])changes.push({label:e.card.type==='cloze'?'Texte':'Question',from:m.front||'(vide)',to:wanted[0]});
+      if((m.back||'')!==wanted[1])changes.push({label:e.card.type==='cloze'?'Précisions':'Réponse',from:m.back||'(vide)',to:wanted[1]});
+      const row=el('div','ankibridge-replacebox');
+      const label=el('label','ankibridge-replacepick');
+      const box=el('input'); box.type='checkbox'; box.className='ankibridge-replacebox-input';
+      box.setAttribute('aria-label',`Remplacer la note ${m.id}`);
+      label.append(box, document.createTextNode(` Remplacer la note #${m.id} — paquet « ${deckLabel(m.deck)} » (modèle ${m.model})`));
+      row.append(label);
+      row.append(el('p','ankibridge-replacehint','Identifiant, paquet, planning de révision et tags sont conservés ; seuls les champs ci-dessous sont réécrits.'));
+      if(!changes.length){
+        box.disabled=true;
+        row.append(el('p','ankibridge-diff','Aucun champ ne diffère : rien à remplacer pour cette carte.'));
+      } else {
+        const diff=el('div','ankibridge-diff');
+        diff.append(el('p','ankibridge-difftitle','Aperçu avant → après'));
+        for(const c of changes){
+          diff.append(el('p','ankibridge-diffline',`${c.label} — avant : ${c.from}`));
+          diff.append(el('p','ankibridge-diffline after',`${c.label} — après : ${c.to}`));
+        }
+        row.append(diff);
+      }
+      box.addEventListener('change',updateReplaceState);
+      e.replaceRow.append(row);
+      e.replace=box;
+    };
     const runAnalysis=async()=>{
       const token=++analysisSeq;
       const atStart=revision;
-      analyze.disabled=true; save.disabled=true;
-      msg.textContent=`Comparaison avec « ${deckLabel(select.value)} » (et ses sous-paquets)…`;
+      analyze.disabled=true; save.disabled=true; replaceBtn.disabled=true;
+      msg.textContent=`Comparaison avec « ${deckLabel(picker.value)} » (et ses sous-paquets)…`;
       try {
         const current=AnkiCards.toCards({cards:currentCards()});
-        const report=await api('ANALYZE',{deck:select.value,cards:current});
+        const report=await api('ANALYZE',{deck:picker.value,cards:current});
         // Résultat périmé (paquet changé, cartes éditées, nouvelle analyse lancée) : on l'ignore.
         if(token!==analysisSeq||atStart!==revision)return;
         verified=true;
         lastReport=report;
-        let exact=0, similar=0;
+        let exact=0, similar=0, replaceable=0;
         report.items.forEach((item,i)=>{
           const e=entries[i];
+          e.item=item; e.kind=item.kind;
           e.notice.replaceChildren();
+          e.notice.className='ankibridge-notice '+item.kind;
           if(item.kind==='exact'){
             e.check.checked=false; exact++;
-            e.notice.textContent='Doublon exact déjà présent dans la collection (ou répété dans ce lot) : ignoré.';
-            e.notice.className='ankibridge-notice duplicate';e.details.open=true;
+            e.notice.textContent='Doublon exact déjà présent dans la collection (ou répété dans ce lot) : ignoré à l\'import.';
+            if(item.duplicates.length)e.notice.append(duplicateBlock(item));
+            e.notice.append(el('p','ankibridge-dupnote',item.note));
           } else if(item.kind==='similar'){
             similar++;
-            e.check.checked=false; // Reste modifiable : éviter les faux positifs médicaux.
-            e.notice.className='ankibridge-notice similar';e.details.open=true;
-            e.notice.textContent='Formulation proche détectée. Non cochée par précaution. À vérifier :';
-            for(const m of item.matches){
-              const p=el('p','',`Note #${m.id} (${Math.round(m.score*100)} % lexical) : ${m.front}`);
-              e.notice.append(p);
-            }
+            e.check.checked=false; // Décochée par précaution, réactivable explicitement.
+            e.notice.textContent='Formulation proche détectée. Non cochée par précaution : à vérifier avant de la réactiver.';
+            e.notice.append(duplicateBlock(item));
           } else {
-            e.notice.className='ankibridge-notice new';
             e.notice.textContent='Aucun doublon détecté dans la zone analysée.';
           }
+          buildReplaceRow(e,item);
+          if(item.replaceable)replaceable++;
         });
-        msg.textContent=`${report.totalExisting} notes existantes (${report.scanned} analysées) • ${exact} doublon(s) certain(s), ${similar} ressemblance(s) à relire.`+
+        updateCount();
+        updateReplaceState();
+        msg.textContent=`${report.totalExisting} notes existantes (${report.scanned} analysées) • ${exact} doublon(s) certain(s), ${similar} ressemblance(s) à relire`+
+          (replaceable?`, ${replaceable} remplacement(s) possible(s)`:'')+'.'+
           (report.partial?' Attention : analyse de similarité PARTIELLE, collection trop volumineuse. Les doublons exacts restent vérifiés globalement.':'')+
           ' Les ressemblances ne prouvent pas que le fait médical est identique.';
         save.disabled=false;
@@ -177,28 +380,76 @@
     };
     analyze.onclick=runAnalysis;
     // Changer de paquet relance la comparaison automatiquement (jamais d'import
-    // basé sur les conclusions du paquet précédent).
-    select.addEventListener('change',()=>{
-      // Nouveau paquet = conclusions de l'ancien jetées, cartes remises à l'état initial,
-      // puis comparaison automatique (aucun import basé sur l'ancien paquet).
-      invalidate({resetChecks:true,why:`Paquet changé : comparaison de « ${deckLabel(select.value)} » en cours…`});
+    // ni de remplacement basé sur les conclusions du paquet précédent).
+    const onDeckSelected=name=>{
+      if(name===lastAnalyzedDeck&&verified)return;
+      lastAnalyzedDeck=name;
+      invalidate({resetChecks:true,why:`Paquet changé : comparaison de « ${deckLabel(name)} » en cours…`});
       clearTimeout(debounceTimer);
       debounceTimer=setTimeout(runAnalysis,250);
-    });
-    foot.append(msg,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
+    };
+    let lastAnalyzedDeck='';
+    foot.append(msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
     overlay.addEventListener('click',e=>{if(e.target===overlay) overlay.remove();});
     const esc=(e)=>{if(e.key==='Escape'){overlay.remove();document.removeEventListener('keydown',esc);}};
     document.addEventListener('keydown',esc);
     try {
       const names=await api('DECKS');
-      select.replaceChildren();
-      names.forEach(name=>{const opt=el('option','',deckLabel(name));opt.value=name;select.append(opt);});
+      picker.setNames(names);
       const saved=await chrome.storage.local.get('deck');
-      if(names.includes(saved.deck))select.value=saved.deck;
       if(!names.length)throw new Error('Aucun paquet Anki disponible. Crée un paquet dans Anki.');
+      picker.setValue(names.includes(saved.deck)?saved.deck:names[0]);
+      lastAnalyzedDeck=picker.value;
       analyze.disabled=false;
       runAnalysis();            // comparaison automatique dès l'ouverture de la fenêtre
-    } catch(e){msg.textContent=`Erreur : ${e.message}`;placeholder.textContent='Anki indisponible';}
+    } catch(e){msg.textContent=`Erreur : ${e.message}`;}
+    // Remplacement : liste sélectionnée explicitement, aperçu affiché, confirmation
+    // obligatoire. Annuler ne déclenche AUCUNE écriture.
+    replaceBtn.onclick=async()=>{
+      try{
+        if(!verified)throw new Error('Comparer les cartes à Anki avant tout remplacement.');
+        // L'aperçu est RECALCULÉ au moment du clic : une carte devenue identique
+        // (aucun champ à changer) n'est jamais confirmée ni écrite.
+        const rows=entries
+          .filter(e=>e.replace?.checked&&e.item?.replaceable&&e.item.duplicates.length===1)
+          .map(e=>({e,m:e.item.duplicates[0]}))
+          .map(({e,m})=>{
+            const wanted=[e.first.value.trim(),e.second.value.trim()];
+            const changes=[];
+            if((m.front||'')!==wanted[0])changes.push({label:e.card.type==='cloze'?'Texte':'Question',from:m.front||'(vide)',to:wanted[0]});
+            if((m.back||'')!==wanted[1])changes.push({label:e.card.type==='cloze'?'Précisions':'Réponse',from:m.back||'(vide)',to:wanted[1]});
+            return {e,m,wanted,changes};
+          });
+        const noop=rows.filter(r=>!r.changes.length);
+        const selected=rows.filter(r=>r.changes.length);
+        if(!selected.length)throw new Error(noop.length
+          ?'Aucun champ ne diffère pour les notes cochées : rien à remplacer.'
+          :'Aucune note cochée pour remplacement.');
+        const lines=[
+          `${selected.length} note(s) existante(s) vont être modifiées dans Anki.`,
+          'Identifiant de note, paquet d\'origine, planning de révision et tags sont conservés ; seuls les champs listés ci-dessous sont réécrits.',
+          'Le contenu actuel de ces champs sera écrasé. Aucune note n\'est supprimée ni déplacée.',
+        ];
+        for(const {e,m,changes} of selected.slice(0,6)){
+          lines.push(`Note #${m.id} — paquet « ${deckLabel(m.deck)} » (modèle ${m.model}) : `+
+            changes.map(c=>`${c.label} « ${c.from} » → « ${c.to} »`).join(' ; '));
+        }
+        if(selected.length>6)lines.push(`… et ${selected.length-6} autre(s).`);
+        if(noop.length)lines.push(`${noop.length} note(s) cochée(s) sans changement : elles ne seront pas touchées.`);
+        const ok=await askConfirm(dialog,`Confirmer le remplacement de ${selected.length} note(s) ?`,lines);
+        if(!ok){msg.textContent='Remplacement annulé : aucune écriture effectuée.';return;}
+        const replacements=selected.map(({e,m,wanted})=>({noteId:m.id,model:m.model,deck:m.deck,type:e.card.type,
+          fingerprint:m.front,originalSecond:m.second,mod:m.mod,first:wanted[0],second:wanted[1]}));
+        replaceBtn.disabled=true; save.disabled=true;
+        msg.textContent=`Remplacement en cours : ${replacements.length} note(s)…`;
+        const r=await api('REPLACE',{replacements});
+        msg.textContent=`${r.updated} note(s) mise(s) à jour, ${r.skipped} sans changement`+
+          (r.failed.length?`, ${r.failed.length} refusée(s) : ${r.failed.map(f=>`#${f.noteId} ${f.reason}`).join(' | ')}`:'')+'.';
+        // Les conclusions de l'analyse ne sont plus valables après écriture.
+        verified=false; save.disabled=true; replaceBtn.disabled=true;
+        analyze.disabled=false;
+      }catch(e){msg.textContent=`Erreur : ${e.message}`;replaceBtn.disabled=!verified;}
+    };
     save.onclick=async()=>{
       try {
         if(!verified)throw new Error('Comparer les cartes à Anki avant de les importer.');
@@ -217,10 +468,10 @@
           throw new Error('Aucune carte sélectionnée. Coche les cartes souhaitées.');
         }
         AnkiCards.toCards({cards:selected});
-        save.disabled=true; analyze.disabled=true;
+        save.disabled=true; analyze.disabled=true; replaceBtn.disabled=true;
         msg.textContent=`Import en cours : ${selected.length} carte(s)...`;
-        await chrome.storage.local.set({deck:select.value});
-        const r=await api('IMPORT',{deck:select.value,cards:selected});
+        await chrome.storage.local.set({deck:picker.value});
+        const r=await api('IMPORT',{deck:picker.value,cards:selected});
         msg.textContent=`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).`+
           (r.errors.length ? `\n${r.errors.join('\n')}` : ' Révise ensuite dans Anki.');
         save.textContent='Import terminé';
@@ -229,6 +480,7 @@
         analyze.disabled=false;
       }catch(e){msg.textContent=`Erreur : ${e.message}`;save.disabled=false;analyze.disabled=false;}
     };
+    updateCount();
   }
   // Appelé uniquement après un clic dans le popup de l'extension.
   // Ne soumet jamais le message : l'utilisatrice le relit avant l'envoi.

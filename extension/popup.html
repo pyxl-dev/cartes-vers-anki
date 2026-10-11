@@ -18,7 +18,7 @@ code{background:#f0f5f2;padding:1px 3px;border-radius:4px}
 <label for="ankiPort">Port AnkiConnect</label><div class="controls"><input id="ankiPort" type="number" min="1" max="65535" step="1" inputmode="numeric" value="8765" style="width:100px" aria-label="Port AnkiConnect"><button id="savePort" class="secondary">Enregistrer le port</button><button id="autoPort" class="secondary">Détection auto</button></div><p>Détection automatique par défaut (8765, puis 8766). Tu peux fixer un autre port libre (1 à 65535) : il doit être identique au <code>webBindPort</code> d'AnkiConnect.</p>
 <div class="controls"><button id="refresh" class="secondary">Tester Anki / actualiser</button></div>
 <details><summary>Mode de secours / dépannage (JSON)</summary><div class="controls"><button id="sample" class="secondary">Exemple JSON</button></div>
-<label for="deck">Paquet de destination</label><select id="deck"><option value="">Connexion à Anki...</option></select>
+<label for="deck">Paquet de destination</label><input id="deckSearch" type="search" placeholder="Rechercher un paquet (accents ignorés)" aria-label="Rechercher un paquet Anki"><select id="deck"><option value="">Connexion à Anki...</option></select>
 <label for="json">Coller les cartes JSON de ChatGPT</label>
 <textarea id="json" placeholder='{"cards":[{"front":"Question","back":"Réponse"}]}'></textarea>
 <div class="controls"><button id="review" class="secondary">1. Vérifier les doublons</button><button id="import" disabled>2. Importer la sélection</button></div><div id="analysis" aria-live="polite"></div></details>

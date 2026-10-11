@@ -40,15 +40,35 @@ $('autoPort').onclick=async()=>{
 };
 let analyzed=null;
 const invalidate=()=>{ analyzed=null;$('import').disabled=true;$('analysis').replaceChildren(); };
+// Recherche de paquet : casse et accents ignorés, sur le chemin complet.
+const normText=s=>String(s??'').replace(/œ/gi,'oe').replace(/æ/gi,'ae').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const deckLabel=d=>String(d).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+let allDecks=[];
+function fillDecks(list,{keepCurrent=true}={}){
+  const current=$('deck').value;
+  $('deck').replaceChildren();
+  // La recherche ne change JAMAIS la destination toute seule : le paquet
+  // sélectionné est conservé même s'il ne correspond pas au filtre.
+  const shown=(keepCurrent&&current&&!list.includes(current))?[current,...list]:list;
+  for(const d of shown){const o=document.createElement('option');o.value=d;o.textContent=deckLabel(d);$('deck').append(o);}
+  $('deck').value=shown.includes(current)?current:(shown[0]||'');
+}
+$('deckSearch').addEventListener('input',()=>{
+  const words=normText($('deckSearch').value).split(/\s+/).filter(Boolean);
+  const kept=allDecks.filter(d=>{const hay=normText(d).replace(/::/g,' ');return words.every(w=>hay.includes(w));});
+  fillDecks(kept);
+  // Toute modification de recherche périme l'analyse précédente.
+  invalidate();
+  status(kept.length?`${kept.length} paquet(s) correspondant(s). Le paquet sélectionné est conservé.`
+    :'Aucun paquet ne correspond : la destination actuelle est conservée.');
+});
 async function refresh(){
   try{
     await api('CONNECT');
     const decks=await api('DECKS');
     const saved=await chrome.storage.local.get('deck');
-    $('deck').replaceChildren();
-    // Libellé lisible par niveaux ; la valeur reste le nom complet Anki « Parent::Enfant ».
-    const deckLabel=d=>String(d).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
-    for(const d of decks){const o=document.createElement('option');o.value=d;o.textContent=deckLabel(d);$('deck').append(o);}
+    allDecks=decks;
+    fillDecks(decks);
     if(decks.includes(saved.deck))$('deck').value=saved.deck;
     invalidate(); status(`Anki connecté sur le port ${$('ankiPort').value}`
       +(portIsManual?' (port choisi manuellement)':' (détecté automatiquement)')
@@ -83,9 +103,14 @@ $('review').onclick=async()=>{
       const source=(cards[i].front||cards[i].text).slice(0,90);
       text.textContent=`${i+1}. ${summary} : ${source}`;
       label.append(check,text);box.append(label);
-      for(const match of r.matches){
+      // Libellés distincts : un doublon CERTAIN (même premier champ) n'est pas
+      // une simple ressemblance lexicale. Les deux sont affichés, sans doublon.
+      for(const match of r.duplicates||[]){
         const small=document.createElement('small');
-        small.textContent=`Anki #${match.id} (${Math.round(match.score*100)} % lexical) : ${match.front}`;
+        const kind=match.certain?'Doublon certain':'Ressemblance';
+        small.textContent=`${kind} — Anki #${match.id} — paquet « ${deckLabel(match.deck||'')||'inconnu'} »`+
+          `${match.model?` (modèle ${match.model})`:''}`+
+          `${match.score!=null?` ${Math.round(match.score*100)} % lexical`:''} : ${match.front}`;
         box.append(small);
       }
       $('analysis').append(box);
