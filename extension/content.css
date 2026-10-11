@@ -1,0 +1,30 @@
+.ankibridge-btn {margin: 8px 0; padding:7px 12px; border-radius:10px; border:1px solid #386d50;
+  background:#e8f6ee; color:#17442b; font:600 12px system-ui; cursor:pointer}
+.ankibridge-btn:hover {background:#d6eedf}
+.ankibridge-overlay {position:fixed;z-index:2147483646;inset:0;background:#111b24a8;
+  display:flex;align-items:center;justify-content:center;padding:14px;font:14px system-ui;color:#16202a}
+.ankibridge-dialog {box-sizing:border-box;width:min(780px,96vw);max-height:92vh;display:flex;flex-direction:column;
+  background:white;color:#17222e;border-radius:16px;box-shadow:0 20px 70px #0004;overflow:hidden}
+.ankibridge-head {display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid #e2e7ea}
+.ankibridge-head h2 {font-size:19px;margin:0;font-weight:700}
+.ankibridge-main {padding:16px 20px;overflow:auto;flex:1}
+.ankibridge-control {display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.ankibridge-control select {flex:1;min-width:200px;border:1px solid #acb9c4;border-radius:9px;padding:9px;background:white;color:#17222e}
+.ankibridge-card {border:1px solid #dde5e6;border-radius:10px;padding:12px;margin-bottom:10px}
+.ankibridge-card summary {cursor:pointer;font-size:13px;font-weight:600;word-break:break-word}
+.ankibridge-card label {display:block;font-size:12px;color:#4b5a65;margin-top:10px}
+.ankibridge-card textarea {box-sizing:border-box;width:100%;min-height:66px;resize:vertical;
+  border:1px solid #c6d3d8;border-radius:8px;padding:9px;color:#17222e;background:white;font:13px system-ui}
+.ankibridge-foot {border-top:1px solid #e2e7ea;display:flex;align-items:center;justify-content:space-between;
+  gap:8px;padding:13px 20px;flex-wrap:wrap}
+.ankibridge-action {border:0;background:#126e47;color:white;padding:11px 16px;border-radius:10px;font-weight:700;cursor:pointer}
+.ankibridge-action:disabled {background:#a1b5ab;cursor:wait}
+.ankibridge-close {font-size:18px;background:transparent;border:0;padding:6px 10px;cursor:pointer;color:#394855}
+.ankibridge-msg {font-size:12px;white-space:pre-line;max-width:520px;color:#385564}
+.ankibridge-review {border:1px solid #295e73;color:#184b5c;background:#e6f4fb;padding:9px;border-radius:9px;cursor:pointer;font-weight:650}
+.ankibridge-review:disabled {opacity:.55;cursor:wait}
+.ankibridge-notice {font:12px/1.45 system-ui;margin:9px 0;color:#586575}
+.ankibridge-notice p {padding:6px;margin:5px 0;background:#fff;border-radius:6px;font-size:12px;color:#243c48}
+.ankibridge-notice.duplicate {color:#a22c2c}
+.ankibridge-notice.similar {color:#8b5604}
+.ankibridge-notice.new {color:#217247}

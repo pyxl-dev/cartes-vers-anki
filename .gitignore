@@ -1,0 +1,27 @@
+# Système
+.DS_Store
+Thumbs.db
+*.swp
+
+# Éditeurs
+.vscode/
+.idea/
+
+# Dépendances et artefacts
+node_modules/
+*.log
+*.zip
+*.crx
+*.pem
+*.key
+
+# Secrets et environnement
+.env
+.env.*
+*.secret
+*.token
+
+# Dossiers de travail locaux et sauvegardes
+scratch/
+tmp/
+backup/

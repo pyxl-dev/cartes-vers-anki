@@ -1,0 +1,27 @@
+<!doctype html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChatGPT → Anki</title>
+<style>
+body{font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:#162d29;background:#fff;margin:0;width:395px}
+header{background:#e8f7ee;padding:16px 18px;border-bottom:1px solid #d2e9d9}h1{font-size:17px;margin:0 0 5px}p{margin:5px 0;line-height:1.5;color:#445a51}
+main{padding:14px 18px} h2{font-size:14px;margin:0 0 7px} details{border-top:1px solid #dde4df;margin-top:14px;padding-top:10px} summary{cursor:pointer;font-weight:650} .quickstart{background:#f1f8f4;border:1px solid #ddebe2;padding:12px;border-radius:11px} .quickstart select{max-width:95px} #composePrompt{flex:1}label{display:block;font-weight:650;margin:10px 0 5px}select,textarea,input[type=number]{box-sizing:border-box;width:100%;border:1px solid #b6c8be;border-radius:8px;background:#fff;color:#20382d;padding:8px}
+textarea{height:130px;resize:vertical;font:12px ui-monospace,Menlo,monospace}button{border:0;border-radius:9px;padding:10px 12px;background:#13734a;color:#fff;cursor:pointer;font-weight:650}
+button:disabled{background:#b6c8be;cursor:wait}button.secondary{background:#e8f2ed;color:#184735}#status{margin:12px 0;white-space:pre-line;font-size:12px} #analysis{max-height:205px;overflow:auto} .preview-item{border:1px solid #dde4df;padding:8px;margin:6px 0;border-radius:8px;font-size:12px} .preview-item label{font-weight:400;margin:0;display:flex;align-items:flex-start;gap:7px} .preview-item input{margin-top:3px;flex-shrink:0} .preview-item small{display:block;padding-left:22px;color:#536b60} .controls{display:flex;gap:7px;margin-top:10px}
+code{background:#f0f5f2;padding:1px 3px;border-radius:4px}
+</style></head><body>
+<header><h1>ChatGPT → Anki</h1><p>100 % local · aucun quota serveur · Anki doit être ouvert.</p></header>
+<main>
+<section class="quickstart">
+<h2>1. Générer les cartes dans ChatGPT</h2>
+<p>Joins ton cours dans ChatGPT, puis prépare la demande de cartes avec ce bouton. Aucune copie de JSON n’est nécessaire.</p>
+<div class="controls"><select id="cardCount" aria-label="Nombre de cartes"><option value="10">10 cartes</option><option value="20" selected>20 cartes</option><option value="30">30 cartes</option><option value="50">50 cartes</option></select><button id="composePrompt">Préparer dans ChatGPT</button></div>
+<p>2. Envoie le message dans ChatGPT. 3. Clique sur <b>Ajouter à Anki</b> sous la réponse et vérifie les cartes.</p>
+</section>
+<label for="ankiPort">Port AnkiConnect</label><div class="controls"><input id="ankiPort" type="number" min="1" max="65535" step="1" inputmode="numeric" value="8765" style="width:100px" aria-label="Port AnkiConnect"><button id="savePort" class="secondary">Enregistrer le port</button><button id="autoPort" class="secondary">Détection auto</button></div><p>Détection automatique par défaut (8765, puis 8766). Tu peux fixer un autre port libre (1 à 65535) : il doit être identique au <code>webBindPort</code> d'AnkiConnect.</p>
+<div class="controls"><button id="refresh" class="secondary">Tester Anki / actualiser</button></div>
+<details><summary>Mode de secours / dépannage (JSON)</summary><div class="controls"><button id="sample" class="secondary">Exemple JSON</button></div>
+<label for="deck">Paquet de destination</label><select id="deck"><option value="">Connexion à Anki...</option></select>
+<label for="json">Coller les cartes JSON de ChatGPT</label>
+<textarea id="json" placeholder='{"cards":[{"front":"Question","back":"Réponse"}]}'></textarea>
+<div class="controls"><button id="review" class="secondary">1. Vérifier les doublons</button><button id="import" disabled>2. Importer la sélection</button></div><div id="analysis" aria-live="polite"></div></details>
+<div id="status" role="status" aria-live="polite">Vérification de la connexion...</div>
+<p>Astuce : dans ChatGPT, un bouton d'import apparaît automatiquement sous les réponses JSON valides. Cet écran reste disponible en cas de changement du site.</p>
+</main><script src="cards.js"></script><script src="popup.js"></script></body></html>
