@@ -22,15 +22,24 @@ const setConn=(kind,text)=>{
   // Le bouton de reprise n'apparaît que lorsque quelque chose est à reprendre.
   $('retry').hidden=(kind!=='bad');
 };
-const feedback=(msg,kind='',fromConn=false)=>{
+// Chaque message porte sa SOURCE et un numéro d'ordre. Une reprise de connexion
+// ne peut effacer qu'un message d'erreur de connexion encore affiché : un compte
+// rendu d'action arrivé entre-temps n'est jamais détruit.
+let feedbackSeq=0, feedbackSource=null, lastConnSeq=-1;
+const feedback=(msg,kind='',source='action')=>{
   const el=$('status');
   el.textContent=msg;
   el.className='feedback'+(kind?' '+kind:'');
-  // Mémorise si le message courant vient de la connexion : lui seul peut être
-  // effacé par une reconnexion réussie, jamais un message d'action.
-  connMessage=fromConn;
+  feedbackSource = msg ? source : null;
+  feedbackSeq++;
+  if(msg && source==='connection') lastConnSeq=feedbackSeq;
 };
-let connMessage=false;
+const clearConnFeedback=()=>{
+  if(feedbackSource==='connection' && feedbackSeq===lastConnSeq) feedback('');
+};
+// Détail technique : visible uniquement dans le bloc de dépannage, jamais dans
+// la vue normale. Le message d'action reste court et actionnable.
+const setTech=msg=>{ const el=$('techDetail'); if(el)el.textContent = msg ? `Détail technique : ${msg}` : ''; };
 
 let portIsManual=false;
 async function loadPort() {
@@ -94,6 +103,10 @@ async function refresh(){
   setConn('unknown','Vérification…');
   try{
     await api('CONNECT');
+    // Une détection automatique peut changer le port réellement utilisé : la
+    // valeur affichée est remise à jour, sauf si l'utilisateur est en train de
+    // la saisir. Un port fixé manuellement reste prioritaire (PORT_INFO le dit).
+    try{ if(document.activeElement!==$('ankiPort')) await loadPort(); }catch{}
     const decks=await api('DECKS');
     const saved=await chrome.storage.local.get('deck');
     const previous=$('deck').value;
@@ -105,16 +118,18 @@ async function refresh(){
     $('deck').value=wanted||decks[0]||'';
     invalidate();
     setConn('ok', decks.length ? `Anki connecté · ${decks.length} paquet(s)` : 'Anki connecté');
-    // Une connexion réussie efface l'éventuel message d'échec précédent, mais
+    // Une connexion réussie efface l'ancien message d'échec de connexion, mais
     // jamais le compte rendu d'une action (prompt, vérification, import).
-    if(connMessage)feedback('');
-    if(!decks.length)feedback('Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.','',true);
+    clearConnFeedback();
+    setTech('');
+    if(!decks.length)feedback('Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.','','connection');
   }catch(e){
     setConn('bad','Anki non détecté');
     $('deck').replaceChildren();
     invalidate();
-    // Message court et actionnable ; le détail technique reste dans les réglages.
-    feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error',true);
+    // Message court et actionnable ; le détail technique va dans les réglages.
+    feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error','connection');
+    setTech(e && e.message ? e.message : String(e));
   }
 }
 $('retry').onclick=refresh;
@@ -220,5 +235,6 @@ $('composePrompt').onclick=async()=>{
 // sans bloquer l'action principale.
 loadPort().then(refresh).catch(e=>{
   setConn('bad','Anki non détecté');
-  feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error',true);
+  feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error','connection');
+  setTech(e && e.message ? e.message : String(e));
 });

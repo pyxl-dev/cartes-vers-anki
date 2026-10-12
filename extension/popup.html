@@ -38,6 +38,8 @@ details .inner{padding:10px 0 2px}
 .fld .row button{flex:none;font-size:12px;padding:8px 10px}
 .portrow{margin:0 0 6px}
 .note{margin:0 0 10px;font-size:11.5px;color:#6b7681}
+.tech{margin:8px 0 10px;color:#6b7681}
+.tech:empty{display:none}
 textarea{width:100%;height:104px;resize:vertical;font:12px ui-monospace,Menlo,monospace}
 #deck,#deckSearch{width:100%}
 .controls{display:flex;gap:6px;margin-top:8px}
@@ -60,6 +62,8 @@ code{background:#f1f3f6;padding:1px 4px;border-radius:4px}
   summary,.fld label,.hint,.preview-item small{color:#a8b2bd}
   .note{color:#8b95a1}
   .feedback{color:#c3cad3}
+  .feedback.ok{color:#86efac}
+  .feedback.error{color:#fca5a5}
   .preview-item{border-color:#2b323c}
   code{background:#252b34}
 }
@@ -96,12 +100,13 @@ code{background:#f1f3f6;padding:1px 4px;border-radius:4px}
       </div>
       <p class="note">Détection automatique par défaut (8765, puis 8766). Un port fixé ici doit être identique au <code>webBindPort</code> d'AnkiConnect.</p>
       <div class="controls"><button id="refresh">Tester la connexion</button></div>
+      <p class="note tech" id="techDetail" role="status" aria-live="polite"></p>
       <p class="note">L'import se fait depuis la page ChatGPT : un bouton « Ajouter à Anki » apparaît sous les réponses qui contiennent un bloc JSON valide.</p>
     </div>
   </details>
 
   <details id="fallback">
-    <summary>Importer un JSON (secours)</summary>
+    <summary>Import manuel (secours)</summary>
     <div class="inner">
       <div class="fld"><label for="deck">Paquet de destination</label>
         <input id="deckSearch" type="search" placeholder="Rechercher un paquet" aria-label="Rechercher un paquet Anki">
