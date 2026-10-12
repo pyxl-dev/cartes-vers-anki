@@ -22,11 +22,15 @@ const setConn=(kind,text)=>{
   // Le bouton de reprise n'apparaît que lorsque quelque chose est à reprendre.
   $('retry').hidden=(kind!=='bad');
 };
-const feedback=(msg,kind='')=>{
+const feedback=(msg,kind='',fromConn=false)=>{
   const el=$('status');
   el.textContent=msg;
   el.className='feedback'+(kind?' '+kind:'');
+  // Mémorise si le message courant vient de la connexion : lui seul peut être
+  // effacé par une reconnexion réussie, jamais un message d'action.
+  connMessage=fromConn;
 };
+let connMessage=false;
 
 let portIsManual=false;
 async function loadPort() {
@@ -101,14 +105,16 @@ async function refresh(){
     $('deck').value=wanted||decks[0]||'';
     invalidate();
     setConn('ok', decks.length ? `Anki connecté · ${decks.length} paquet(s)` : 'Anki connecté');
-    if(!decks.length)feedback('Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.');
-    else if(portIsManual)feedback('');
+    // Une connexion réussie efface l'éventuel message d'échec précédent, mais
+    // jamais le compte rendu d'une action (prompt, vérification, import).
+    if(connMessage)feedback('');
+    if(!decks.length)feedback('Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.','',true);
   }catch(e){
     setConn('bad','Anki non détecté');
     $('deck').replaceChildren();
     invalidate();
     // Message court et actionnable ; le détail technique reste dans les réglages.
-    feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error');
+    feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error',true);
   }
 }
 $('retry').onclick=refresh;
@@ -214,5 +220,5 @@ $('composePrompt').onclick=async()=>{
 // sans bloquer l'action principale.
 loadPort().then(refresh).catch(e=>{
   setConn('bad','Anki non détecté');
-  feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error');
+  feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error',true);
 });

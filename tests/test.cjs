@@ -1532,6 +1532,9 @@ async function popupTests() {
     assert.deepEqual($('cardCount').querySelectorAll('option').map(o => o.getAttribute('value')), ['10', '20', '30', '50']);
     assert.equal($('cardCount').value, '20', '20 cartes par défaut');
     assert.equal(doc.querySelectorAll('.hint').length, 1, 'une seule ligne d’aide');
+    // Le libellé de l'action ne doit pas être répété (titre + bouton).
+    const vtxt = visibleText(doc.querySelector('main'));
+    assert.equal((vtxt.match(/Préparer dans ChatGPT/g) || []).length, 1, 'une seule occurrence visible de l’action');
   });
   await ta('popup : état de connexion séparé du message d’action', async () => {
     const { $ } = popupHarness(popupOk());
@@ -1613,6 +1616,34 @@ async function popupTests() {
     const imp = sent.find(m => m.type === 'IMPORT');
     assert.ok(imp, 'IMPORT doit être envoyé');
     assert.equal(imp.cards.length, 1, 'une carte sélectionnée');
+  });
+  await ta('popup : une reconnexion réussie efface le message d’erreur', async () => {
+    let injoignable = true;
+    const respond = msg => {
+      if (msg.type === 'CONNECT' && injoignable) return { ok: false, error: 'injoignable' };
+      return popupOk()(msg);
+    };
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.equal($('connState').textContent, 'Anki non détecté');
+    assert.match($('status').textContent, /Ouvre Anki/, 'erreur affichée au premier essai');
+    injoignable = false;
+    $('retry').onclick();
+    await settle();
+    assert.match($('connState').textContent, /Anki connecté/, 'reconnexion détectée');
+    assert.equal($('status').textContent, '', 'le message d’erreur doit disparaître après une reconnexion');
+    assert.equal($('retry').hidden, true, 'plus de bouton de reprise');
+  });
+  await ta('popup : une reconnexion réussie ne détruit pas un message d’action', async () => {
+    const { $ } = popupHarness(popupOk());
+    await settle();
+    $('composePrompt').onclick();
+    await settle();
+    const message = $('status').textContent;
+    assert.match(message, /Ajouter à Anki/, 'compte rendu de l’action affiché');
+    $('refresh').onclick();
+    await settle();
+    assert.equal($('status').textContent, message, 'le message d’action doit être conservé');
   });
   await ta('popup : les zones de retour sont annoncées aux lecteurs d’écran', async () => {
     const { $ } = popupHarness(popupOk());
