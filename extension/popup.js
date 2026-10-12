@@ -139,8 +139,8 @@ $('json').addEventListener('input',invalidate);
 
 $('sample').onclick=()=>{
   $('json').value=JSON.stringify({cards:[
-    {type:'basic',front:'Quel organe produit l’insuline ?',back:'Les cellules β des îlots de Langerhans, dans le pancréas.',tags:['demo_medecine']},
-    {type:'cloze',text:'L’insuline est produite par les {{c1::cellules β}} du {{c2::pancréas}}.',extra:'Carte de démonstration.'}
+    {type:'basic',front:'Quelle est la capitale de l’Australie ?',back:'Canberra.',tags:['revision','geographie']},
+    {type:'cloze',text:'En Python, la fonction {{c1::len()}} renvoie le nombre d’éléments d’une séquence.',extra:'Carte de démonstration.',tags:['revision','programmation']}
   ]},null,2);invalidate();feedback('Exemple chargé. Choisis un paquet pour tester.');
 };
 $('review').onclick=async()=>{
@@ -178,7 +178,7 @@ $('review').onclick=async()=>{
     const similar=report.items.filter(x=>x.kind==='similar').length;
     feedback(`${report.totalExisting} notes existantes, ${report.scanned} comparées : ${exact} doublon(s) exact(s), ${similar} ressemblance(s).`+
       (report.partial?' Analyse de similarité PARTIELLE (plus de 20 000 notes).':'')+
-      '\nLes ressemblances lexicales sont seulement des alertes ; vérifie les faits médicaux.');
+      '\nLes ressemblances lexicales sont seulement des alertes ; vérifie que les informations sont identiques.');
     $('import').disabled=false;
   }catch(e){feedback(`Vérification impossible : ${e.message}`,'error');}
   finally{$('review').disabled=false;}
@@ -205,12 +205,12 @@ $('import').onclick=async()=>{
    Elle ne dépend PAS d'Anki : l'utilisateur peut préparer sa demande même si
    Anki est momentanément fermé. L'état de connexion reste affiché à part.
 --------------------------------------------------------------------------- */
-function buildMedicalPrompt(count) {
-  return `À partir du cours que j’ai joint ou fourni dans cette conversation, crée ${count} flashcards Anki pour mes révisions de médecine. Si tu n’as pas reçu le cours, demande-moi de le fournir avant de générer.
+function buildGeneralPrompt(count) {
+  return `À partir du cours, des notes, du document ou du contenu que j’ai joint ou fourni dans cette conversation, crée ${count} flashcards Anki pour mes révisions. Si tu n’as pas reçu de contenu à transformer, demande-moi de te le fournir avant de générer.
 
-Exigences : une connaissance par carte ; formulation non ambiguë ; réponses concises ; privilégier les connaissances importantes pour l’examen. Respecte strictement les valeurs, unités, références et recommandations du document. N’invente aucune information et n’ajoute aucune connaissance absente du cours. Évite les doublons dans ce lot.
+Exigences : une connaissance par carte ; formulation non ambiguë ; réponse concise ; privilégier les connaissances importantes du document. Respecte strictement les faits, chiffres, unités, noms et références du contenu, quel que soit le sujet traité. N’invente aucune information et n’ajoute aucune connaissance absente du contenu fourni. Évite les doublons dans ce lot.
 
-Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["medecine"]},{"type":"cloze","text":"Le {{c1::terme}} est ...","extra":"Précision éventuelle","tags":["medecine"]}]}. Utilise des cartes classiques ou cloze selon le type de connaissance. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
+Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
 }
 $('composePrompt').onclick=async()=>{
   const btn=$('composePrompt');btn.disabled=true;
@@ -220,7 +220,7 @@ $('composePrompt').onclick=async()=>{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     if(!tab?.id)throw new Error('Aucun onglet actif.');
     const response=await new Promise((resolve,reject)=>{
-      chrome.tabs.sendMessage(tab.id,{type:'ANKI_INSERT_PROMPT',prompt:buildMedicalPrompt(count)},r=>{
+      chrome.tabs.sendMessage(tab.id,{type:'ANKI_INSERT_PROMPT',prompt:buildGeneralPrompt(count)},r=>{
         if(chrome.runtime.lastError)return reject(new Error(chrome.runtime.lastError.message));
         resolve(r);
       });

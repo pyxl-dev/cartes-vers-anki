@@ -625,6 +625,17 @@ async function contentTests() {
     assert.match(ov.querySelector('.ankibridge-sr').textContent, /À revérifier/);
   });
 
+  await ta('message de ressemblance : formulation générique, sans discipline', async () => {
+    const items = Array.from({ length: 13 }, () => anItem('new'));
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk(items));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const msg = root.querySelector('.ankibridge-overlay').querySelector('.ankibridge-msg').textContent;
+    assert.match(msg, /Une ressemblance de formulation ne garantit pas que les informations sont identiques/);
+    assert.ok(!/m[ée]dical|m[ée]decine|clinique/i.test(msg), 'aucune discipline supposée dans le message visible');
+  });
+
   /* --- ancrage du bouton (régression : colonne étirée dans la grille ChatGPT) --- */
   await ta('bouton : enveloppé dans .ankibridge-actions, unique, juste après le bloc de code', async () => {
     const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
@@ -1752,6 +1763,58 @@ async function popupTests() {
       assert.ok(r >= 4.5, `contraste ${nom} insuffisant : ${r.toFixed(2)}:1 (attendu ≥ 4.5 sur ${fond})`);
     }
   });
+  await ta('popup : le prompt est générique et n’impose aucune discipline', async () => {
+    for (const n of [10, 20, 30, 50]) {
+      const { $, tabMessages } = popupHarness(popupOk());
+      await settle();
+      $('cardCount').value = String(n);
+      $('composePrompt').onclick();
+      await settle();
+      const prompt = tabMessages[0].msg.prompt;
+      assert.match(prompt, new RegExp(n + ' flashcards'), n + ' cartes demandées');
+      assert.ok(!/m[ée]decine|m[ée]dical|clinique|examen|insuline|pancr[ée]as/i.test(prompt),
+        'le prompt ne doit supposer aucune discipline (' + n + ')');
+      assert.match(prompt, /cours, des notes, du document ou du contenu/, 'sources acceptées');
+      assert.match(prompt, /demande-moi de te le fournir/, 'contenu exigé avant génération');
+      assert.match(prompt, /quel que soit le sujet/, 'aucune restriction de sujet');
+      assert.match(prompt, /Respecte strictement les faits, chiffres, unités, noms et références/, 'faits du document');
+      assert.match(prompt, /N’invente aucune information/, 'contrainte de non-invention');
+      assert.match(prompt, /n’ajoute aucune connaissance absente/, 'aucun apport externe');
+      assert.match(prompt, /une connaissance par carte/, 'une connaissance par carte');
+      assert.match(prompt, /Évite les doublons/, 'anti-doublons');
+      assert.match(prompt, /un seul bloc de code JSON valide, sans texte avant ou après/, 'réponse unique');
+      assert.match(prompt, /"tags":\["revision"\]/, 'tag générique par défaut');
+      assert.ok(!/"tags":\["medecine"\]/.test(prompt), 'aucun tag propre à une discipline');
+      for (const cle of ['cards', 'type', 'basic', 'cloze', 'front', 'back', 'text', 'extra', 'tags']) {
+        assert.ok(prompt.includes('"' + cle + '"'), 'clé JSON attendue : ' + cle);
+      }
+    }
+  });
+  await ta('popup : l’exemple de secours est neutre et accepté par le parseur', async () => {
+    const { $ } = popupHarness(popupOk());
+    await settle();
+    $('sample').onclick();
+    const exemple = $('json').value;
+    assert.ok(!/m[ée]decine|m[ée]dical|insuline|pancr[ée]as|cellules/i.test(exemple), 'exemple sans contenu médical');
+    const cards = JSON.parse(exemple).cards;
+    assert.equal(cards.length, 2);
+    assert.equal(cards[0].type, 'basic');
+    assert.equal(cards[1].type, 'cloze');
+    for (const c of cards) assert.ok(c.tags.includes('revision'), 'chaque exemple porte un tag générique');
+    assert.equal(cardsContext().toCards(exemple).length, 2, 'les exemples doivent passer le parseur de l’extension');
+  });
+  await ta('popup : un sujet inventé passe sans restriction', async () => {
+    const exemple = JSON.stringify({ cards: [
+      { type: 'basic', front: 'Que produit l’organe fictif Numa ?', back: 'De l’Oria.', tags: ['revision'] },
+      { type: 'cloze', text: 'Le Numa produit de l’{{c1::Oria}}.', extra: '', tags: ['revision'] }
+    ] });
+    assert.equal(cardsContext().toCards(exemple).length, 2, 'un sujet inventé doit être accepté');
+    const { $, tabMessages } = popupHarness(popupOk());
+    await settle();
+    $('composePrompt').onclick();
+    await settle();
+    assert.ok(!/m[ée]decine|m[ée]dical/i.test(tabMessages[0].msg.prompt), 'le prompt reste neutre');
+  });
   await ta('popup : les zones de retour sont annoncées aux lecteurs d’écran', async () => {
     const { $ } = popupHarness(popupOk());
     await settle();
@@ -1779,7 +1842,7 @@ async function popupTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.4.2', () => assert.equal(mf.version, '1.4.2'));
+  t('version 1.4.3', () => assert.equal(mf.version, '1.4.3'));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));
@@ -1814,6 +1877,15 @@ function manifestTests() {
     assert.match(rules[0], /border:0/);
     assert.match(rules[0], /padding:0/);
     assert.match(rules[0], /margin:0/);
+  });
+  t('aucune formulation centrée sur une discipline dans l’extension', () => {
+    // L'extension sert toutes les matières : plus aucune formulation visible ne
+    // doit supposer la médecine.
+    const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html)$/.test(f));
+    for (const f of files) {
+      const src = fs.readFileSync(EXT(f), 'utf8');
+      assert.ok(!/m[ée]decin|m[ée]dic|medical|clinique/i.test(src), `${f}: formulation liée à une discipline`);
+    }
   });
   t('aucune information de configuration personnelle dans les sources', () => {
     // Règle volontairement GÉNÉRIQUE : elle ne nomme ni outil, ni agent, ni fichier
