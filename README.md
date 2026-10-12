@@ -12,7 +12,38 @@ Extension navigateur (Manifest V3) qui transforme les cartes générées par Cha
 2. **AnkiConnect** (greffon Anki) — dans Anki : `Outils → Greffons → Obtenir des greffons`, code **`2055492159`**, puis quitter et relancer Anki.
 3. Un navigateur Chromium : **Brave**, **Chrome** ou **Edge**.
 
-## Installation
+## Installation rapide sur macOS (kit bêta)
+
+Pour une installation sans Terminal, le dossier **`macos/`** contient deux
+fichiers à double-cliquer :
+
+1. **`Installer Cartes vers Anki.command`** — à lancer **une fois**. Il
+   télécharge une copie permanente de l'extension dans
+   `~/Applications/Cartes vers Anki Beta`, affiche les trois clics à faire dans
+   Brave, et pose un raccourci **Mettre à jour Cartes vers Anki** sur le Bureau.
+2. **`Mettre à jour Cartes vers Anki.command`** — à relancer ensuite pour
+   récupérer les nouvelles versions, sans rien retaper.
+
+Le kit ne touche ni à Anki, ni aux cartes, ni à l'historique de révision, et ne
+parle jamais à AnkiConnect : il ne fait que télécharger le dépôt officiel.
+La mise à jour se limite à `git fetch` puis `git merge --ff-only` — jamais de
+remise à zéro, jamais d'écrasement, jamais de changement de branche.
+
+Détails, dépannage et avertissement macOS : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
+
+> **Fichiers téléchargés en ZIP.** Vérifié sur l'archive réelle de cette
+> branche : le droit d'exécution est bien transporté, donc le double-clic
+> fonctionne après extraction. Si ton outil de décompression ne le conserve pas
+> (certains clients Windows, ou une ré-archive manuelle), le double-clic ouvre
+> le fichier dans un éditeur : fais alors **clic droit sur le fichier →
+> *Ouvrir avec* → Terminal**, une seule fois. Un `git clone` conserve ce droit
+> dans tous les cas.
+>
+> **Premier lancement.** macOS peut afficher un avertissement de développeur non
+> identifié : clic droit sur le fichier → **Ouvrir** → **Ouvrir**. Aucun mot de
+> passe n'est demandé, aucun `sudo`, aucune protection désactivée.
+
+## Installation manuelle
 
 1. Télécharger ce dépôt (bouton *Code → Download ZIP*) et le décompresser dans un dossier **permanent**. Ne plus déplacer le dossier `extension/` ensuite.
 2. Ouvrir `brave://extensions` (ou `chrome://extensions`).
@@ -134,10 +165,11 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs
+node tests/test.cjs          # extension : 115 tests
+bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-65 tests hors navigateur, sans réseau externe :
+115 tests hors navigateur, sans réseau externe :
 
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;
 - port AnkiConnect : validation `1..65535`, identification d'un vrai AnkiConnect, refus d'un JSON étranger / d'une page HTML / d'un objet sans version, ordre de sondage 8765 → 8766, priorité du choix manuel, aucune écriture envoyée pendant la sonde ;
@@ -146,6 +178,8 @@ node tests/test.cjs
 - cohérence du manifeste (version, permissions minimales, aucune URL distante, aucun motif de secret).
 
 **Ce que les tests ne couvrent pas :** le site ChatGPT.com réel (le DOM du test est une reproduction), Anki lui-même (le serveur est simulé), et l'accessibilité avec un lecteur d'écran.
+
+Le kit macOS est testé séparément, dans un bac à sable jetable : `HOME` temporaire, dépôt Git local, Bureau temporaire. Le vrai dossier personnel n'est jamais écrit et aucun raccourci réel n'est créé. Les cas couverts : première installation, réinstallation idempotente, mise à jour vers une nouvelle version, « déjà à jour », modifications locales refusées, origine étrangère refusée, mauvaise branche refusée, chemins contenant des espaces, absence de `git`, syntaxe et droit d'exécution, et absence de tout appel à Anki ou à AnkiConnect.
 
 ## Structure
 
@@ -157,7 +191,12 @@ extension/      extension chargeable (manifest.json à la racine de ce dossier)
   search.js     lecture des notes existantes (contexte et recherche)
   similarity.js comparaison lexicale locale (formulations proches)
   popup.html/popup.js  interface : port, préparation du prompt, mode de secours
-tests/test.cjs  tests hors navigateur
+macos/          kit bêta : installer et mettre à jour par double-clic
+  Installer Cartes vers Anki.command
+  Mettre à jour Cartes vers Anki.command
+  LISEZ-MOI.md  mode d'emploi et dépannage
+tests/test.cjs  tests hors navigateur de l'extension
+tests/mac-beta-setup.sh  tests du kit macOS (bac à sable jetable)
 ```
 
 ## Licence
