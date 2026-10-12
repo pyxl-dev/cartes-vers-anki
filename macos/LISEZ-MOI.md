@@ -1,5 +1,9 @@
 # Kit bêta macOS — Cartes vers Anki
 
+> **Premier réflexe :** ouvre **[00 - INSTALLER SUR MAC.html](../00%20-%20INSTALLER%20SUR%20MAC.html)**
+> (à la racine du dossier téléchargé). C'est le guide pas à pas, avec les écrans
+> d'avertissement de macOS et la façon de les autoriser.
+
 Deux fichiers à double-cliquer dans le Finder, pour installer l'extension une
 première fois puis la mettre à jour sans rien retaper.
 
@@ -30,15 +34,41 @@ simple double-clic.
 > droit d'exécution est conservé, et l'installateur le rétablit de toute façon
 > sur sa propre copie.
 
-## Premier lancement : l'avertissement de macOS
+## Premier lancement : autoriser l'installateur dans macOS
 
-macOS peut afficher un message du type *« … ne peut pas être ouvert car il
-provient d'un développeur non identifié »*. C'est normal pour un script non
-signé. Pour l'autoriser : **clic droit sur le fichier → Ouvrir → Ouvrir**. Une
-seule fois suffit.
+L'installateur n'est pas signé par Apple. Au premier double-clic, macOS affiche
+donc cette fenêtre :
 
-Ce kit ne demande jamais ton mot de passe, n'utilise pas `sudo` et ne désactive
-aucune protection de macOS.
+> *Élément « Installer Cartes vers Anki.command » non ouvert — Apple n'a pas pu
+> confirmer que ce logiciel ne contient pas de logiciel malveillant.*
+> Boutons : « Placer dans la corbeille » et « Terminé ».
+
+**La marche à suivre, dans cet ordre :**
+
+1. Clique **« Terminé »**. Surtout pas « Placer dans la corbeille » : ce bouton
+   enverrait le fichier à la poubelle et il faudrait le retélécharger.
+2. Ouvre ** (menu Pomme) → Réglages Système → Confidentialité et sécurité**.
+3. Descends à la section **Sécurité** : une ligne concerne
+   « Installer Cartes vers Anki.command », avec le bouton **« Ouvrir quand
+   même »**. Clique-le, puis confirme. macOS peut demander ton mot de passe ou
+   Touch ID : c'est macOS qui le demande, pas le projet.
+4. **Double-clique à nouveau** l'installateur. Cette fois il s'exécute.
+
+**Si le bouton « Ouvrir quand même » n'est pas là :**
+
+- refais d'abord un double-clic sur le fichier, c'est cette tentative qui fait
+  apparaître le bouton ;
+- reviens ensuite dans **Confidentialité et sécurité → Sécurité** ;
+- le bouton n'est proposé qu'environ **une heure** après la tentative ;
+- sur un Mac administré (école, entreprise) ou avec un **contrôle parental**
+  actif, le bouton peut être indisponible : il faut alors l'accord de la personne
+  qui gère l'ordinateur.
+
+Ce kit ne demande jamais ton mot de passe, n'utilise pas `sudo`, ne désactive
+aucune protection de macOS et ne retire aucune mise en quarantaine. La seule
+autorisation donnée est celle que tu accordes toi-même, à l'étape 3, dans les
+réglages d'Apple. Le guide illustré complet est dans
+**[00 - INSTALLER SUR MAC.html](../00%20-%20INSTALLER%20SUR%20MAC.html)**.
 
 ## Limites connues de cette version bêta
 
@@ -50,9 +80,13 @@ aucune protection de macOS.
   fichier dans un éditeur de texte, et le geste prévu est *clic droit → Ouvrir
   avec → Terminal*. L'installateur rétablit de toute façon le droit d'exécution
   sur la copie qu'il installe.
-- **Avertissement de sécurité macOS.** Le premier lancement peut demander une
-  confirmation (clic droit → *Ouvrir*). Le kit n'est pas signé : c'est normal
-  pour un script distribué hors App Store.
+- **Avertissement de sécurité macOS.** Le kit n'est pas signé : macOS bloque le
+  premier double-clic. L'autorisation passe par **Réglages Système →
+  Confidentialité et sécurité → Sécurité → « Ouvrir quand même »** (voir la
+  section précédente). Il n'existe aucun contournement automatique, et le projet
+  n'en propose aucun : faire disparaître complètement cet avertissement demande
+  une vraie signature Developer ID et une notarisation, décrites dans
+  [NOTARISATION.md](NOTARISATION.md).
 - **Deux navigateurs seulement testés** : Brave et Chrome (Chromium). Edge
   devrait fonctionner, sans garantie.
 - **Raccourci du Bureau.** Il peut être refusé si macOS restreint l'accès au

@@ -4,6 +4,12 @@ Extension navigateur (Manifest V3) qui transforme les cartes générées par Cha
 
 **Entièrement local :** l'extension ne parle qu'à `AnkiConnect` sur la boucle locale (`127.0.0.1`). Aucun serveur distant, aucune clé d'API, aucun compte, aucune télémétrie, aucun quota imposé par l'extension.
 
+> ### 🍎 Sur Mac, commence par ouvrir [00 - INSTALLER SUR MAC.html](00%20-%20INSTALLER%20SUR%20MAC.html)
+>
+> Ce guide hors ligne reprend tout, pas à pas, **y compris la fenêtre
+> d'avertissement de macOS** et la façon de l'autoriser toi-même. Il s'ouvre par
+> simple double-clic, dans ton navigateur.
+
 ---
 
 ## Prérequis
@@ -14,8 +20,29 @@ Extension navigateur (Manifest V3) qui transforme les cartes générées par Cha
 
 ## Installation rapide sur macOS (kit bêta)
 
-Pour une installation sans Terminal, le dossier **`macos/`** contient deux
-fichiers à double-cliquer :
+**À faire avant tout le reste.** L'installateur n'est pas signé par Apple. Au
+premier double-clic, macOS affiche donc cette fenêtre :
+
+> *Élément « Installer Cartes vers Anki.command » non ouvert — Apple n'a pas pu
+> confirmer que ce logiciel ne contient pas de logiciel malveillant.*
+> Boutons : « Placer dans la corbeille » et « Terminé ».
+
+1. Clique **« Terminé »** — jamais « Placer dans la corbeille », qui enverrait le
+   fichier à la poubelle.
+2. Va dans ** → Réglages Système → Confidentialité et sécurité**, section
+   **Sécurité**, et clique **« Ouvrir quand même »**, puis confirme.
+3. **Double-clique à nouveau** l'installateur : il s'exécute cette fois.
+
+Le bouton « Ouvrir quand même » n'est proposé qu'environ **une heure** après la
+tentative, et il peut être absent sur un Mac administré ou avec contrôle
+parental. Si tu ne le vois pas : refais un double-clic, puis reviens dans
+**Sécurité**. Cette autorisation est une décision que tu prends toi-même dans les
+réglages d'Apple ; le projet ne désactive aucune protection et ne contourne rien.
+
+Le parcours complet, écran par écran, est dans
+**[00 - INSTALLER SUR MAC.html](00%20-%20INSTALLER%20SUR%20MAC.html)**.
+
+Ensuite, le dossier **`macos/`** contient deux fichiers à double-cliquer :
 
 1. **`Installer Cartes vers Anki.command`** — à lancer **une fois**. Il
    télécharge une copie permanente de l'extension dans
@@ -29,7 +56,7 @@ parle jamais à AnkiConnect : il ne fait que télécharger le dépôt officiel.
 La mise à jour se limite à `git fetch` puis `git merge --ff-only` — jamais de
 remise à zéro, jamais d'écrasement, jamais de changement de branche.
 
-Détails, dépannage et avertissement macOS : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
+Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
 > **Fichiers téléchargés en ZIP.** Vérifié sur l'archive réelle de cette
 > branche : le droit d'exécution est bien transporté, donc le double-clic
@@ -39,9 +66,10 @@ Détails, dépannage et avertissement macOS : **[macos/LISEZ-MOI.md](macos/LISEZ
 > *Ouvrir avec* → Terminal**, une seule fois. Un `git clone` conserve ce droit
 > dans tous les cas.
 >
-> **Premier lancement.** macOS peut afficher un avertissement de développeur non
-> identifié : clic droit sur le fichier → **Ouvrir** → **Ouvrir**. Aucun mot de
-> passe n'est demandé, aucun `sudo`, aucune protection désactivée.
+> **Avertissement de macOS.** Voir le parcours en tête de cette section. Le
+> clic droit → *Ouvrir* → *Ouvrir* ne suffit plus sur les versions récentes de
+> macOS : c'est bien par **Réglages Système → Confidentialité et sécurité** que
+> l'autorisation se donne.
 
 ## Installation manuelle
 
