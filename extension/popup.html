@@ -1,27 +1,120 @@
-<!doctype html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChatGPT → Anki</title>
+<!doctype html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cartes vers Anki</title>
 <style>
-body{font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:#162d29;background:#fff;margin:0;width:395px}
-header{background:#e8f7ee;padding:16px 18px;border-bottom:1px solid #d2e9d9}h1{font-size:17px;margin:0 0 5px}p{margin:5px 0;line-height:1.5;color:#445a51}
-main{padding:14px 18px} h2{font-size:14px;margin:0 0 7px} details{border-top:1px solid #dde4df;margin-top:14px;padding-top:10px} summary{cursor:pointer;font-weight:650} .quickstart{background:#f1f8f4;border:1px solid #ddebe2;padding:12px;border-radius:11px} .quickstart select{max-width:95px} #composePrompt{flex:1}label{display:block;font-weight:650;margin:10px 0 5px}select,textarea,input[type=number]{box-sizing:border-box;width:100%;border:1px solid #b6c8be;border-radius:8px;background:#fff;color:#20382d;padding:8px}
-textarea{height:130px;resize:vertical;font:12px ui-monospace,Menlo,monospace}button{border:0;border-radius:9px;padding:10px 12px;background:#13734a;color:#fff;cursor:pointer;font-weight:650}
-button:disabled{background:#b6c8be;cursor:wait}button.secondary{background:#e8f2ed;color:#184735}#status{margin:12px 0;white-space:pre-line;font-size:12px} #analysis{max-height:205px;overflow:auto} .preview-item{border:1px solid #dde4df;padding:8px;margin:6px 0;border-radius:8px;font-size:12px} .preview-item label{font-weight:400;margin:0;display:flex;align-items:flex-start;gap:7px} .preview-item input{margin-top:3px;flex-shrink:0} .preview-item small{display:block;padding-left:22px;color:#536b60} .controls{display:flex;gap:7px;margin-top:10px}
-code{background:#f0f5f2;padding:1px 3px;border-radius:4px}
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;width:348px;font:13px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:#16202b;background:#fff}
+header{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid #e6e9ee;background:#fafbfc}
+.brand{font-weight:650;font-size:13px;letter-spacing:-.1px;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#c3cad3;flex:none}
+.dot.ok{background:#15803d}
+.dot.bad{background:#b45309}
+.dot.unknown{background:#c3cad3}
+.state{margin-left:auto;font-size:12px;color:#4a5560;display:flex;align-items:center;gap:6px;min-width:0}
+.state .txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+main{padding:13px 14px 15px}
+.lbl{display:block;font-weight:650;font-size:13px;margin:0 0 7px}
+.row{display:flex;gap:8px;align-items:stretch}
+select,input[type=number],input[type=search],textarea{font:inherit;color:inherit;background:#fff;border:1px solid #c8cfd8;border-radius:8px;padding:8px}
+select{padding:8px 6px}
+button{font:inherit;font-weight:650;border:1px solid transparent;border-radius:8px;padding:9px 12px;cursor:pointer;background:#eef1f5;color:#1b2b3a}
+button.primary{background:#15803d;color:#fff;flex:1}
+button:disabled{opacity:.55;cursor:default}
+button.link{background:none;border:0;padding:0 2px;font-weight:600;color:#1d4ed8;text-decoration:underline;font-size:12px}
+:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.hint{margin:9px 0 0;font-size:12px;color:#5a6672}
+.feedback{margin:10px 0 0;font-size:12px;color:#3b4753;white-space:pre-line}
+.feedback:empty{display:none}
+.feedback.error{color:#9a3412}
+.feedback.ok{color:#14532d}
+details{border-top:1px solid #e6e9ee;margin-top:13px;padding-top:11px}
+summary{cursor:pointer;font-weight:600;font-size:12.5px;color:#3b4753;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸";display:inline-block;margin-right:6px;color:#8b95a1}
+details[open]>summary::before{content:"▾"}
+details .inner{padding:10px 0 2px}
+.fld{margin:0 0 9px}
+.fld label{display:block;font-size:12px;font-weight:600;margin:0 0 4px;color:#3b4753}
+.fld .row{gap:6px}
+.fld input[type=number]{width:96px}
+.fld .row button{flex:none;font-size:12px;padding:8px 10px}
+.portrow{margin:0 0 6px}
+.note{margin:0 0 10px;font-size:11.5px;color:#6b7681}
+textarea{width:100%;height:104px;resize:vertical;font:12px ui-monospace,Menlo,monospace}
+#deck,#deckSearch{width:100%}
+.controls{display:flex;gap:6px;margin-top:8px}
+.controls button{flex:1;font-size:12px;padding:8px 10px}
+#analysis{max-height:180px;overflow:auto;margin-top:8px}
+.preview-item{border:1px solid #e6e9ee;border-radius:8px;padding:7px;margin:6px 0;font-size:12px}
+.preview-item label{font-weight:400;margin:0;display:flex;align-items:flex-start;gap:7px}
+.preview-item input{margin-top:3px;flex:none}
+.preview-item small{display:block;padding-left:22px;color:#5a6672}
+code{background:#f1f3f6;padding:1px 4px;border-radius:4px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+@media (prefers-color-scheme:dark){
+  body{background:#161a20;color:#e6eaf0}
+  header{background:#1b2027;border-bottom-color:#2b323c}
+  .state{color:#a8b2bd}
+  button{background:#252b34;color:#e6eaf0}
+  button.primary{background:#1c8c4d;color:#fff}
+  select,input[type=number],input[type=search],textarea{background:#1b2027;border-color:#39414c;color:#e6eaf0}
+  details{border-top-color:#2b323c}
+  summary,.fld label,.hint,.preview-item small{color:#a8b2bd}
+  .note{color:#8b95a1}
+  .feedback{color:#c3cad3}
+  .preview-item{border-color:#2b323c}
+  code{background:#252b34}
+}
 </style></head><body>
-<header><h1>ChatGPT → Anki</h1><p>100 % local · aucun quota serveur · Anki doit être ouvert.</p></header>
+<header>
+  <span class="dot unknown" id="connDot"></span>
+  <span class="brand">Cartes vers Anki</span>
+  <span class="state"><span class="txt" id="connState" role="status" aria-live="polite">Connexion…</span><button id="retry" class="link" hidden>Réessayer</button></span>
+</header>
 <main>
-<section class="quickstart">
-<h2>1. Générer les cartes dans ChatGPT</h2>
-<p>Joins ton cours dans ChatGPT, puis prépare la demande de cartes avec ce bouton. Aucune copie de JSON n’est nécessaire.</p>
-<div class="controls"><select id="cardCount" aria-label="Nombre de cartes"><option value="10">10 cartes</option><option value="20" selected>20 cartes</option><option value="30">30 cartes</option><option value="50">50 cartes</option></select><button id="composePrompt">Préparer dans ChatGPT</button></div>
-<p>2. Envoie le message dans ChatGPT. 3. Clique sur <b>Ajouter à Anki</b> sous la réponse et vérifie les cartes.</p>
-</section>
-<label for="ankiPort">Port AnkiConnect</label><div class="controls"><input id="ankiPort" type="number" min="1" max="65535" step="1" inputmode="numeric" value="8765" style="width:100px" aria-label="Port AnkiConnect"><button id="savePort" class="secondary">Enregistrer le port</button><button id="autoPort" class="secondary">Détection auto</button></div><p>Détection automatique par défaut (8765, puis 8766). Tu peux fixer un autre port libre (1 à 65535) : il doit être identique au <code>webBindPort</code> d'AnkiConnect.</p>
-<div class="controls"><button id="refresh" class="secondary">Tester Anki / actualiser</button></div>
-<details><summary>Mode de secours / dépannage (JSON)</summary><div class="controls"><button id="sample" class="secondary">Exemple JSON</button></div>
-<label for="deck">Paquet de destination</label><input id="deckSearch" type="search" placeholder="Rechercher un paquet (accents ignorés)" aria-label="Rechercher un paquet Anki"><select id="deck"><option value="">Connexion à Anki...</option></select>
-<label for="json">Coller les cartes JSON de ChatGPT</label>
-<textarea id="json" placeholder='{"cards":[{"front":"Question","back":"Réponse"}]}'></textarea>
-<div class="controls"><button id="review" class="secondary">1. Vérifier les doublons</button><button id="import" disabled>2. Importer la sélection</button></div><div id="analysis" aria-live="polite"></div></details>
-<div id="status" role="status" aria-live="polite">Vérification de la connexion...</div>
-<p>Astuce : dans ChatGPT, un bouton d'import apparaît automatiquement sous les réponses JSON valides. Cet écran reste disponible en cas de changement du site.</p>
-</main><script src="cards.js"></script><script src="popup.js"></script></body></html>
+  <section>
+    <label class="lbl" for="cardCount">Préparer dans ChatGPT</label>
+    <div class="row">
+      <select id="cardCount" aria-label="Nombre de cartes à demander">
+        <option value="10">10 cartes</option><option value="20" selected>20 cartes</option>
+        <option value="30">30 cartes</option><option value="50">50 cartes</option>
+      </select>
+      <button id="composePrompt" class="primary">Préparer dans ChatGPT</button>
+    </div>
+    <p class="hint">Puis envoie la demande dans ChatGPT.</p>
+  </section>
+
+  <div id="status" class="feedback" role="status" aria-live="polite"></div>
+
+  <details id="settings">
+    <summary>Réglages et dépannage</summary>
+    <div class="inner">
+      <div class="fld portrow">
+        <label for="ankiPort">Port AnkiConnect</label>
+        <div class="row">
+          <input id="ankiPort" type="number" min="1" max="65535" step="1" inputmode="numeric" value="8765" aria-label="Port AnkiConnect">
+          <button id="savePort">Enregistrer</button>
+          <button id="autoPort">Détection auto</button>
+        </div>
+      </div>
+      <p class="note">Détection automatique par défaut (8765, puis 8766). Un port fixé ici doit être identique au <code>webBindPort</code> d'AnkiConnect.</p>
+      <div class="controls"><button id="refresh">Tester la connexion</button></div>
+      <p class="note">L'import se fait depuis la page ChatGPT : un bouton « Ajouter à Anki » apparaît sous les réponses qui contiennent un bloc JSON valide.</p>
+    </div>
+  </details>
+
+  <details id="fallback">
+    <summary>Importer un JSON (secours)</summary>
+    <div class="inner">
+      <div class="fld"><label for="deck">Paquet de destination</label>
+        <input id="deckSearch" type="search" placeholder="Rechercher un paquet" aria-label="Rechercher un paquet Anki">
+        <div class="controls"><select id="deck" aria-label="Paquet de destination"><option value="">Connexion à Anki…</option></select></div>
+      </div>
+      <div class="fld"><label for="json">Cartes JSON de ChatGPT</label>
+        <textarea id="json" placeholder='{"cards":[{"front":"Question","back":"Réponse"}]}'></textarea>
+      </div>
+      <div class="controls"><button id="sample">Exemple</button><button id="review">Vérifier les doublons</button><button id="import" disabled>Importer</button></div>
+      <div id="analysis" aria-live="polite"></div>
+    </div>
+  </details>
+</main>
+<script src="cards.js"></script><script src="popup.js"></script></body></html>
