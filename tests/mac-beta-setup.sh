@@ -227,6 +227,11 @@ if printf '%s' "$OUT" | grep -qi "sudo"; then ko "git absent : aucun sudo propos
 # --- 11. Garde-fous du kit -----------------------------------------------
 echo
 echo "--- 11. Garde-fous du kit ---"
+# Motifs de contrôle assemblés à l'exécution : ce fichier ne doit pas se
+# détecter lui-même, comme le fait déjà tests/audit-anti-leak.sh.
+S='/'
+HOME_RE="${S}Users${S}[A-Za-z]"
+MAIL_RE="[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
 if grep -qE "curl[^|]*\|[[:space:]]*bash|wget[^|]*\|[[:space:]]*bash" "$INSTALLER" "$UPDATER"; then
   ko "aucun « curl | bash »" "motif trouvé"
 else
@@ -254,7 +259,7 @@ if grep -qE "127\.0\.0\.1|localhost|:8765|:8766|curl |wget |ncat |/dev/tcp/" "$I
 else
   ok "aucun accès réseau local dans le kit"
 fi
-if grep -qE "/Users/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}" "$INSTALLER" "$UPDATER"; then
+if grep -qE "${HOME_RE}|${MAIL_RE}" "$INSTALLER" "$UPDATER"; then
   ko "aucun chemin ni courriel personnel dans le kit" "motif trouvé"
 else
   ok "aucun chemin ni courriel personnel dans le kit"

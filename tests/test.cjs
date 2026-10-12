@@ -580,6 +580,50 @@ async function contentTests() {
       'la fenêtre fermée ne doit plus être mise à jour par un résultat périmé');
   });
 
+  /* --- régression review PR #3 : état initial et statuts après écriture --- */
+  await ta('cases désactivées et décochées tant que les paquets ne sont pas chargés', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const respond = msg => msg.type === 'DECKS' ? pending.then(() => respondOk([])(msg)) : respondOk([])(msg);
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 200));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const boxes = ov.querySelectorAll('.ankibridge-pick');
+    assert.equal(boxes.length, 13);
+    assert.ok(boxes.every(b => b.disabled), 'aucune case ne doit être cochable avant le chargement des paquets');
+    assert.ok(boxes.every(b => !b.checked), 'aucune case ne doit être cochée avant vérification');
+    assert.match(ov.querySelector('.ankibridge-count').textContent, /^0 sélectionnée/);
+    release();
+    await new Promise(r => setTimeout(r, 400));
+  });
+  await ta('erreur de chargement des paquets : import impossible, cases bloquées', async () => {
+    const respond = msg => msg.type === 'DECKS' ? { ok: false, error: 'Anki injoignable' } : respondOk([])(msg);
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Erreur/);
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, true, 'import impossible');
+    assert.ok(ov.querySelectorAll('.ankibridge-pick').every(b => b.disabled), 'cases toujours bloquées');
+  });
+  await ta('après import, les statuts repassent en état neutre « à revérifier »', async () => {
+    const items = Array.from({ length: 13 }, () => anItem('new'));
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk(items));
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal(ov.querySelectorAll('.ankibridge-row .ankibridge-dot.new').length, 13, 'statuts verts après analyse');
+    ov.querySelector('.ankibridge-action').onclick();
+    await new Promise(r => setTimeout(r, 500));
+    assert.equal(ov.querySelectorAll('.ankibridge-row .ankibridge-dot.new').length, 0, 'aucun statut vert périmé après écriture');
+    assert.equal(ov.querySelectorAll('.ankibridge-row .ankibridge-dot.pending').length, 13, 'statuts neutres attendus');
+    assert.match(ov.querySelector('.ankibridge-sr').textContent, /À revérifier/);
+  });
+
   /* --- ancrage du bouton (régression : colonne étirée dans la grille ChatGPT) --- */
   await ta('bouton : enveloppé dans .ankibridge-actions, unique, juste après le bloc de code', async () => {
     const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
@@ -676,10 +720,7 @@ async function contentTests() {
     const ov = root.querySelector('.ankibridge-overlay');
     pickDeck(root, 'Rapide');
     await new Promise(r => setTimeout(r, 2500));
-    const checked = ov.querySelectorAll('.ankibridge-card input[type=checkbox]').length
-      - ov.querySelectorAll('.ankibridge-card input[type=checkbox]:not([checked])').length;
-    void checked;
-    const checkedCount = [...ov.querySelectorAll('.ankibridge-card input[type=checkbox]')].filter(x => x.checked).length;
+    const checkedCount = [...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.checked).length;
     assert.equal(checkedCount, 13, 'le résultat périmé (doublons) a été appliqué à tort');
     assert.equal(ov.querySelector('.ankibridge-action').disabled, false);
   });
@@ -746,10 +787,10 @@ async function contentTests() {
     root.querySelector('.ankibridge-btn').click();
     await new Promise(r => setTimeout(r, 900));
     const ov = root.querySelector('.ankibridge-overlay');
-    const picks = () => ov.querySelectorAll('.ankibridge-card input.ankibridge-pick').filter(x => x.checked).length;
+    const picks = () => ov.querySelectorAll('.ankibridge-pick').filter(x => x.checked).length;
     assert.equal(picks(), 5, 'seules les cartes nouvelles sont cochées après analyse');
     assert.match(ov.querySelector('.ankibridge-count').textContent, /5 sélectionnée\(s\) sur 13/);
-    const first = ov.querySelectorAll('.ankibridge-card input.ankibridge-pick')[0];
+    const first = ov.querySelectorAll('.ankibridge-pick')[0];
     first.checked = false; first.dispatchEvent(new Event('change', { bubbles: true }));
     assert.equal(picks(), 4, 'décochage individuel pris en compte');
     assert.match(ov.querySelector('.ankibridge-count').textContent, /4 sélectionnée\(s\) sur 13/);
@@ -862,6 +903,152 @@ async function contentTests() {
     assert.equal(ov.querySelectorAll('img').length, 0, 'aucune balise image créée');
     assert.equal(ov.querySelectorAll('script').length, 0, 'aucune balise script créée');
     assert.match(ov.querySelector('.ankibridge-notice').textContent, /onerror/);
+  });
+
+  /* --- visibilité des cases et statuts des cartes --- */
+  const rowsOf = ov => ov.querySelectorAll('.ankibridge-row');
+  const dotOf = (ov, i) => rowsOf(ov)[i].querySelector('.ankibridge-dot');
+  const pickOf = (ov, i) => rowsOf(ov)[i].querySelector('.ankibridge-pick');
+  const srOf = (ov, i) => rowsOf(ov)[i].querySelector('.ankibridge-sr');
+  const openModal = async (respond, cardsJson = JSON13, savedDeck = 'Cours') => {
+    const h2 = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, cardsJson))], savedDeck }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    h2.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    return h2.root.querySelector('.ankibridge-overlay');
+  };
+
+  await ta('structure : case visible même repliée, hors de <summary> et de <details>', async () => {
+    const ov = await openModal(respondOk(items5new8exact));
+    assert.equal(rowsOf(ov).length, 13);
+    assert.equal(ov.querySelectorAll('.ankibridge-pick').length, 13, 'une case par ligne');
+    for (let i = 0; i < 13; i++) {
+      assert.equal(pickOf(ov, i).closest('summary'), null, 'la case ne doit pas être dans <summary>');
+      assert.equal(pickOf(ov, i).closest('details'), null, 'la case ne doit pas être dans <details>');
+      assert.ok(pickOf(ov, i).closest('summary') === null && pickOf(ov, i).parentElement === rowsOf(ov)[i],
+        'la case doit être un frère direct de <details>');
+    }
+    const title = rowsOf(ov)[0].querySelector('.ankibridge-title');
+    assert.ok(title.closest('summary'), 'le titre doit être dans <summary> pour déplier au clic');
+    assert.ok([...ov.querySelectorAll('.ankibridge-card')].every(d => d.open === false), 'aucune ligne ouverte d’office');
+  });
+  await ta('titre : type de note conservé et texte peu tronqué', async () => {
+    const ov = await openModal(respondOk(items5new8exact));
+    const titles = rowsOf(ov).map(r => r.querySelector('.ankibridge-title').textContent);
+    assert.match(titles[0], /^1\. \[Basique\] Q1/);
+    assert.match(titles[10], /^11\. \[Texte à trous\] Le \{\{c1::GLOOP\}\}/);
+  });
+  await ta('statuts : point + libellé accessible + tooltip, sans ouvrir les lignes', async () => {
+    const items = [anItem('new'), anItem('similar'), anItem('exact'), ...Array.from({ length: 10 }, () => anItem('new'))];
+    const ov = await openModal(respondOk(items));
+    assert.equal(dotOf(ov, 0).getAttribute('aria-label'), 'Nouvelle');
+    assert.equal(dotOf(ov, 0).getAttribute('title'), 'Nouvelle');
+    assert.ok(dotOf(ov, 0).className.includes('new'));
+    assert.equal(srOf(ov, 0).textContent, 'Nouvelle');
+    assert.equal(dotOf(ov, 1).getAttribute('aria-label'), 'Formulation similaire');
+    assert.ok(dotOf(ov, 1).className.includes('similar'));
+    assert.equal(srOf(ov, 1).textContent, 'Formulation similaire');
+    assert.equal(dotOf(ov, 2).getAttribute('aria-label'), 'Déjà présente');
+    assert.ok(dotOf(ov, 2).className.includes('exact'));
+    assert.equal(srOf(ov, 2).textContent, 'Déjà présente');
+    assert.equal(dotOf(ov, 2).getAttribute('role'), 'img');
+    assert.ok(pickOf(ov, 0).getAttribute('aria-describedby'), 'libellé de statut lié à la case');
+    assert.ok([...ov.querySelectorAll('.ankibridge-card')].every(d => d.open === false), 'statuts visibles sans déplier');
+    // légende : les trois statuts sont expliqués en clair
+    const legend = ov.querySelector('.ankibridge-legend').textContent;
+    for (const word of ['Nouvelle', 'Formulation similaire', 'Déjà présente']) assert.ok(legend.includes(word), 'légende sans ' + word);
+  });
+  await ta('doublon exact : case d’import désactivée, décochée, expliquée', async () => {
+    const items = [anItem('new'), anItem('exact'), ...Array.from({ length: 11 }, () => anItem('new'))];
+    const ov = await openModal(respondOk(items));
+    assert.equal(pickOf(ov, 1).disabled, true, 'case d’import désactivée pour un doublon exact');
+    assert.equal(pickOf(ov, 1).checked, false, 'doublon exact jamais coché');
+    assert.equal(pickOf(ov, 0).disabled, false);
+    assert.match(rowsOf(ov)[1].querySelector('.ankibridge-notice').textContent, /Doublon exact/);
+    // le contrôle de remplacement est DISTINCT et seulement sous le détail
+    const itemsR = [anItem('new'), anItem('exact', { duplicates: [DUP_OK], replaceable: true }), ...Array.from({ length: 11 }, () => anItem('new'))];
+    const ov2 = await openModal(respondOk(itemsR));
+    const replaceBox = rowsOf(ov2)[1].querySelector('.ankibridge-replacebox-input');
+    assert.ok(replaceBox, 'contrôle de remplacement attendu');
+    assert.notEqual(replaceBox.className, pickOf(ov2, 1).className, 'contrôles distincts');
+    assert.ok(replaceBox.closest('details'), 'le remplacement vit dans le détail');
+    assert.equal(pickOf(ov2, 1).closest('details'), null);
+  });
+  await ta('compteur instantané : tout sélectionner (nouvelles) n’exact jamais un doublon', async () => {
+    const items = [anItem('new'), anItem('exact'), anItem('similar'), ...Array.from({ length: 10 }, () => anItem('new'))];
+    const ov = await openModal(respondOk(items));
+    assert.match(ov.querySelector('.ankibridge-count').textContent, /11 sélectionnée\(s\) sur 13/);
+    ov.querySelector('.ankibridge-selectnone').onclick();
+    assert.match(ov.querySelector('.ankibridge-count').textContent, /0 sélectionnée\(s\) sur 13/);
+    ov.querySelector('.ankibridge-selectnew').onclick();
+    assert.match(ov.querySelector('.ankibridge-count').textContent, /11 sélectionnée\(s\) sur 13/);
+    assert.equal(pickOf(ov, 1).checked, false, 'un doublon exact ne se réactive pas');
+    assert.equal(pickOf(ov, 2).checked, false, 'une ressemblance ne se réactive pas toute seule');
+  });
+  await ta('état intermédiaire : points neutres pendant la comparaison, statuts ensuite', async () => {
+    let resolveAnalyze = null;
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['Cours'] };
+      if (msg.type === 'ANALYZE') return new Promise(r => { resolveAnalyze = () => r({ ok: true, value: { items: Array.from({ length: 13 }, () => anItem('new')), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck } }); });
+      return { ok: true, value: { added: 0, skipped: 0, errors: [], total: 0 } };
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 300));
+    const ov = root.querySelector('.ankibridge-overlay');
+    const dots = () => [...ov.querySelectorAll('.ankibridge-row .ankibridge-dot')];
+    assert.ok(dots().length === 13);
+    assert.ok(dots().every(d => d.className.includes('pending')), 'points neutres pendant la comparaison');
+    assert.ok(dots().every(d => d.getAttribute('aria-label') === 'Comparaison en cours'));
+    assert.ok([...ov.querySelectorAll('.ankibridge-pick')].every(c => c.disabled === true), 'cases désactivées pendant la comparaison');
+    resolveAnalyze();
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(dots().every(d => d.className.includes('new')), 'statuts appliqués après la comparaison');
+    assert.ok([...ov.querySelectorAll('.ankibridge-pick')].every(c => c.disabled === false));
+  });
+  await ta('changement de paquet : nouveaux statuts, doublons exacts jamais réactivés', async () => {
+    const respond = msg => {
+      if (msg.type === 'DECKS') return { ok: true, value: ['A', 'B'] };
+      if (msg.type === 'ANALYZE') return { ok: true, value: { items: Array.from({ length: 13 }, (_, i) => anItem(i < 3 ? 'exact' : 'new')), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck } };
+      return { ok: true, value: { added: 0, skipped: 0, errors: [], total: 0 } };
+    };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'A' }, respond);
+    await new Promise(r => setTimeout(r, 700));
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.disabled).length, 3);
+    pickDeck(root, 'B');
+    await new Promise(r => setTimeout(r, 1200));
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.disabled).length, 3, 'les 3 exacts restent désactivés');
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.checked).length, 10);
+    assert.ok([...ov.querySelectorAll('.ankibridge-row .ankibridge-dot')].filter(d => d.className.includes('exact')).length === 3);
+    ov.querySelector('.ankibridge-selectnew').onclick();
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.checked).length, 10, 'jamais de réactivation des exacts');
+  });
+  await ta('CSS : la case est dessinée par nos règles, indépendante du thème et de la page', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const pick = (css.match(/\.ankibridge-pick\s*\{([^}]*)\}/) || [])[1] || '';
+    for (const p of ['appearance:none', 'width:18px', 'height:18px', 'border:2px solid', 'background:#fff', 'color-scheme:light']) {
+      assert.ok(pick.includes(p), 'règle .ankibridge-pick sans ' + p);
+    }
+    assert.ok(/\.ankibridge-pick:checked\{[^}]*background:#15803d/.test(css), 'état coché sans fond explicite');
+    assert.ok(/\.ankibridge-pick:checked\{[^}]*background-image:url\("data:image\/svg\+xml/.test(css), 'coche dessinée absente');
+    assert.ok(/\.ankibridge-pick:disabled\{[^}]*background:#e2e8f0/.test(css), 'état désactivé sans fond explicite');
+    assert.ok(/\.ankibridge-dialog\{[^}]*color-scheme:light/.test(css), 'le dialogue doit forcer le schéma clair');
+  });
+  await ta('lot de 50 cartes : 50 lignes, 50 cases visibles, statuts corrects', async () => {
+    const items = Array.from({ length: 50 }, (_, i) => anItem(i < 20 ? 'new' : i < 35 ? 'similar' : 'exact'));
+    const ov = await openModal(respondOk(items), JSON.stringify({ cards: basic(50) }));
+    assert.equal(rowsOf(ov).length, 50);
+    assert.equal(ov.querySelectorAll('.ankibridge-pick').length, 50);
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.checked).length, 20);
+    assert.equal([...ov.querySelectorAll('.ankibridge-pick')].filter(x => x.disabled).length, 15);
+    const dots = [...ov.querySelectorAll('.ankibridge-row .ankibridge-dot')];
+    assert.equal(dots.filter(d => d.className.includes('exact')).length, 15);
+    assert.equal(dots.filter(d => d.className.includes('similar')).length, 15);
+    assert.equal(dots.filter(d => d.className.includes('new')).length, 20);
   });
 }
 
@@ -1215,7 +1402,7 @@ async function replaceTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.4.0', () => assert.equal(mf.version, '1.4.0'));
+  t('version 1.4.2', () => assert.equal(mf.version, '1.4.2'));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));
@@ -1241,14 +1428,25 @@ function manifestTests() {
     assert.match(src, /const PROBE_PORTS = \[8765, 8766\]/,
       'l’ordre standard doit être respecté ; la vérification de version écarte un port occupé');
   });
+  t('review PR #3 : une seule règle .ankibridge-card, sans bordure ni marge héritées', () => {
+    // Une règle héritée plus bas dans la feuille écrasait la remise à zéro et
+    // rajoutait bordure, padding et marge sur chaque ligne de carte.
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const rules = (css.match(/^\.ankibridge-card\s*\{[^}]*\}/gm) || []);
+    assert.equal(rules.length, 1, 'une seule règle .ankibridge-card attendue');
+    assert.match(rules[0], /border:0/);
+    assert.match(rules[0], /padding:0/);
+    assert.match(rules[0], /margin:0/);
+  });
   t('aucune information de configuration personnelle dans les sources', () => {
-    // Aucun détail de la machine de développement ne doit sortir dans un dépôt public.
-    // Motifs génériques uniquement : ce test ne doit lui-même nommer aucune donnée perso.
+    // Règle volontairement GÉNÉRIQUE : elle ne nomme ni outil, ni agent, ni fichier
+    // d'un environnement particulier. Un chemin de compte, une adresse électronique
+    // ou un secret n'ont rien à faire dans un dépôt public.
     const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|css|json)$/.test(f));
     for (const f of files) {
       const src = fs.readFileSync(EXT(f), 'utf8');
-      assert.ok(!/\bHermes\b|PORT_REGISTRY|\/Users\/[A-Za-z]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i.test(src),
-        `${f}: information de configuration personnelle`);
+      assert.ok(!/\/Users\/[A-Za-z0-9._-]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|sk-[A-Za-z0-9]{10,}|BEGIN [A-Z ]*PRIVATE KEY/.test(src),
+        `${f}: chemin de compte, adresse électronique ou secret`);
     }
   });
   t('aucune clé API / télémétrie dans les sources', () => {

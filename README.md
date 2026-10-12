@@ -63,7 +63,17 @@ Détails, dépannage et avertissement macOS : **[macos/LISEZ-MOI.md](macos/LISEZ
 
 Le paquet de destination se **recherche** : taper tout ou partie du nom (la casse, les accents et les ligatures sont ignorés — `coeur` trouve `cœur`). Les résultats sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) alors que la valeur transmise reste le nom complet Anki `Parent::Enfant`. Un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**. Le sélecteur se pilote au clavier (flèches puis Entrée) ; taper ne relance pas la comparaison, seule une **sélection** le fait.
 
-**Sélection des cartes.** Chaque carte se coche ou se décoche individuellement ; deux boutons font **« Tout sélectionner (cartes nouvelles) »** et **« Tout désélectionner »**, et un compteur indique en permanence le nombre de cartes retenues. Après analyse, seules les cartes nouvelles sont cochées : les doublons exacts sont décochés et non réimportables, les formulations proches sont décochées par précaution mais restent réactivables en connaissance de cause.
+**Sélection des cartes.** Chaque ligne porte une **case à cocher toujours visible**, y compris quand le détail est replié : cliquer la case sélectionne ou désélectionne la carte sans ouvrir la ligne ; cliquer le titre ou le chevron déplie le détail. Deux boutons font **« Tout sélectionner (cartes nouvelles) »** et **« Tout désélectionner »**, et un compteur indique en permanence le nombre de cartes retenues.
+
+Chaque ligne affiche aussi un **point de statut** avant le titre, complété par une légende et un libellé accessible (le statut ne repose jamais sur la seule couleur) :
+
+| Point | Statut | Signification |
+|---|---|---|
+| 🟢 vert | Nouvelle | Aucun doublon détecté : la carte est cochée pour l'import |
+| 🟠 orange | Formulation similaire | Ressemblance lexicale : décochée par précaution, réactivable en connaissance de cause |
+| 🔴 rouge | Déjà présente | Doublon certain : case d'import **désactivée** et décochée, non réimportable |
+
+Pendant la comparaison, les points restent **neutres** (« Comparaison en cours ») et les cases sont désactivées : aucun statut n'est affiché avant d'avoir été vérifié. Si une carte est à la fois un doublon certain et une ressemblance, c'est **le doublon qui prime**. Après analyse, seules les cartes nouvelles sont cochées ; un doublon exact ne peut jamais être réactivé, ni par un changement de paquet, ni par « Tout sélectionner (cartes nouvelles) ».
 
 ## Doublons localisés et remplacement
 
