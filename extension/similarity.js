@@ -55,7 +55,7 @@
         const overlap=shared/Math.min(words.length,note.tok.length);
         let score=note.normalized===sig?1:shared<2?Math.min(.55,d):.65*d+.35*overlap;
         // L'égalité de réponse peut signaler une paraphrase, sans prouver
-        // qu'il s'agit d'une même connaissance médicale.
+        // qu'il s'agit de la même connaissance.
         if(answer.length>3&&answer===note.answer&&shared>=1)score=Math.max(score,.7);
         if(score>=.67)ranked.push({id:note.id,front:shortText(note.front),score:Number(score.toFixed(2))});
       }

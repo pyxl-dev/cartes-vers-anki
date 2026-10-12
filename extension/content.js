@@ -449,7 +449,7 @@
         msg.textContent=`${report.totalExisting} notes existantes (${report.scanned} analysées) • ${exact} doublon(s) certain(s), ${similar} ressemblance(s) à relire`+
           (replaceable?`, ${replaceable} remplacement(s) possible(s)`:'')+'.'+
           (report.partial?' Attention : analyse de similarité PARTIELLE, collection trop volumineuse. Les doublons exacts restent vérifiés globalement.':'')+
-          ' Les ressemblances ne prouvent pas que le fait médical est identique.';
+          ' Une ressemblance de formulation ne garantit pas que les informations sont identiques.';
         save.disabled=false;
       } catch(e){
         if(!alive()||token!==analysisSeq)return;
