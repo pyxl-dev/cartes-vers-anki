@@ -129,8 +129,14 @@ LINK_T="$(readlink "$DESKTOP_SB/Mettre à jour Cartes vers Anki.command" 2>/dev/
 if [ "$LINK_T" = "$INSTALL/macos/Mettre à jour Cartes vers Anki.command" ]; then ok "raccourci : délègue au script installé"; else ko "raccourci : délègue au script installé" "cible « $LINK_T »"; fi
 if printf '%s' "$OUT" | grep -q "Charger l'extension non empaquetée"; then ok "installation : instructions navigateur affichées"; else ko "installation : instructions navigateur affichées" "texte absent"; fi
 if printf '%s' "$OUT" | grep -q "1.4.0"; then ok "installation : version affichée"; else ko "installation : version affichée" "texte absent"; fi
-# Aucun accès au vrai dossier personnel
-if [ ! -e "$REAL_HOME/Applications/Cartes vers Anki Beta" ]; then ok "aucune écriture dans le vrai dossier Applications"; else ko "aucune écriture dans le vrai dossier Applications" "chemin réel créé"; fi
+# Aucun accès au vrai dossier personnel : on compare l'état réel AVANT et APRÈS
+# l'ensemble des tests. Une installation réelle préexistante ne fait donc plus
+# échouer la suite, alors qu'une écriture provoquée par les tests la ferait
+# échouer immédiatement.
+real_snapshot() {
+  { ls -l "$REAL_HOME/Applications" 2>/dev/null; ls -l "$REAL_HOME/Desktop" 2>/dev/null; } | md5 -q 2>/dev/null || echo "indisponible"
+}
+REAL_BEFORE="$(real_snapshot)"
 
 # --- 3. Réinstallation idempotente ---------------------------------------
 echo
@@ -278,6 +284,61 @@ if [ "$CODE" -eq 0 ]; then ok "dépôt sans kit : installation aboutie"; else ko
 if [ -f "$INSTALL_SANS/extension/manifest.json" ]; then ok "dépôt sans kit : extension bien installée"; else ko "dépôt sans kit : extension bien installée" "extension absente"; fi
 if [ -e "$LINK_SANS" ]; then ko "dépôt sans kit : aucun raccourci cassé" "raccourci créé vers un script absent"; else ok "dépôt sans kit : aucun raccourci cassé"; fi
 if printf '%s' "$OUT" | grep -q "ne contient pas encore le script"; then ok "dépôt sans kit : explication claire"; else ko "dépôt sans kit : explication claire" "$OUT"; fi
+
+# --- 13. Guide d'installation macOS (HTML statique) ----------------------
+echo
+echo "--- 13. Guide d'installation macOS ---"
+GUIDE="$REPO_DIR/00 - INSTALLER SUR MAC.html"
+if [ -f "$GUIDE" ]; then ok "guide : présent à la racine du dossier"; else ko "guide : présent à la racine du dossier" "fichier absent"; fi
+for kw in "Terminé" "Placer dans la corbeille" "Confidentialité et sécurité" "Ouvrir quand même" "github.com/pyxl-dev/cartes-vers-anki" "Mode développeur" "Charger l'extension non empaquetée" "2055492159"; do
+  if grep -qF "$kw" "$GUIDE" 2>/dev/null; then ok "guide : mentionne « $kw »"; else ko "guide : mentionne « $kw »" "absent"; fi
+done
+if grep -qE "xattr[[:space:]]+-d|spctl[[:space:]]+(--master-disable|disable)|sudo " "$GUIDE" 2>/dev/null; then
+  ko "guide : aucune recommandation de contournement" "$(grep -nE 'xattr[[:space:]]+-d|spctl[[:space:]]+(--master-disable|disable)|sudo ' "$GUIDE" | head -2)"
+else
+  ok "guide : aucune recommandation de contournement"
+fi
+if grep -qE "<script|src=[\"']https?://|@import|url\(https?://" "$GUIDE" 2>/dev/null; then
+  ko "guide : aucun script ni ressource distante" "$(grep -nE '<script|src=["'"'"']https?://|@import|url\(https?://' "$GUIDE" | head -2)"
+else
+  ok "guide : aucun script ni ressource distante"
+fi
+if head -1 "$GUIDE" | grep -qi "<!DOCTYPE html>" && grep -qi '<html lang="fr"' "$GUIDE" && grep -qi "</html>" "$GUIDE"; then
+  ok "guide : HTML statique bien formé"
+else
+  ko "guide : HTML statique bien formé" "structure inattendue"
+fi
+for rel in "macos/LISEZ-MOI.md" "macos/NOTARISATION.md"; do
+  if grep -qF "$rel" "$GUIDE" 2>/dev/null && [ -f "$REPO_DIR/$rel" ]; then ok "guide : lien relatif vers $rel"; else ko "guide : lien relatif vers $rel" "lien ou cible manquant"; fi
+done
+for doc in "$REPO_DIR/README.md" "$MACOS_DIR/LISEZ-MOI.md"; do
+  if grep -qF "00%20-%20INSTALLER%20SUR%20MAC.html" "$doc" 2>/dev/null; then ok "lien vers le guide dans $(basename "$doc")"; else ko "lien vers le guide dans $(basename "$doc")" "absent"; fi
+done
+if [ -f "$MACOS_DIR/NOTARISATION.md" ] && grep -q "notarytool" "$MACOS_DIR/NOTARISATION.md" && grep -q "Developer ID" "$MACOS_DIR/NOTARISATION.md"; then
+  ok "note de notarisation présente et utile"
+else
+  ko "note de notarisation présente et utile" "absente ou incomplète"
+fi
+if grep -qE "clic droit sur le fichier → \*\*Ouvrir\*\* → \*\*Ouvrir\*\*" "$REPO_DIR/README.md" 2>/dev/null; then
+  ko "README : ne promet plus le clic droit → Ouvrir" "formulation encore présente"
+else
+  ok "README : ne promet plus le clic droit → Ouvrir"
+fi
+if grep -qE "Réglages Système|Confidentialité et sécurité" "$REPO_DIR/README.md" 2>/dev/null; then
+  ok "README : parcours officiel macOS en évidence"
+else
+  ko "README : parcours officiel macOS en évidence" "absent"
+fi
+
+# --- 14. Le vrai dossier personnel n'a pas bougé --------------------------
+echo
+echo "--- 14. Intégrité du vrai dossier personnel ---"
+REAL_AFTER="$(real_snapshot)"
+if [ "$REAL_BEFORE" = "$REAL_AFTER" ]; then
+  ok "aucune écriture dans le vrai dossier personnel pendant les tests"
+else
+  ko "aucune écriture dans le vrai dossier personnel pendant les tests" "état modifié : Applications ou Bureau"
+fi
 
 echo
 echo "bac à sable supprimé : $SB"

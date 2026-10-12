@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer Cartes vers Anki sur Mac</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; padding: 32px 20px 64px; font: 16px/1.6 -apple-system, "Helvetica Neue", Arial, sans-serif;
+         background: #f6f7f9; color: #16181d; }
+  main { max-width: 760px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 28px 32px 36px;
+         box-shadow: 0 1px 3px rgba(15,23,42,.10), 0 8px 28px rgba(15,23,42,.06); }
+  h1 { font-size: 27px; line-height: 1.25; margin: 0 0 6px; }
+  .sub { color: #4b5563; margin: 0 0 26px; }
+  h2 { font-size: 19px; margin: 34px 0 10px; padding-top: 18px; border-top: 1px solid #e5e7eb; }
+  h2:first-of-type { border-top: 0; padding-top: 0; }
+  .step { display: flex; gap: 14px; margin: 0 0 14px; }
+  .num { flex: none; width: 28px; height: 28px; border-radius: 50%; background: #1d4ed8; color: #fff;
+         font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
+  .body { min-width: 0; }
+  .body p { margin: 0 0 8px; }
+  .body p:last-child { margin-bottom: 0; }
+  code, .kbd { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 5px; padding: 1px 6px;
+               font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+  .alert { background: #fff7ed; border: 1px solid #fdba74; border-left: 5px solid #ea580c;
+           border-radius: 10px; padding: 16px 18px; margin: 16px 0; }
+  .alert h3 { margin: 0 0 8px; font-size: 17px; color: #9a3412; }
+  .ok { background: #f0fdf4; border: 1px solid #86efac; border-left: 5px solid #16a34a;
+        border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+  .danger { background: #fef2f2; border: 1px solid #fca5a5; border-left: 5px solid #dc2626;
+            border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+  .dialog { background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 10px; padding: 14px 16px;
+            margin: 12px 0; font-size: 15px; }
+  .dialog .title { font-weight: 700; }
+  .buttons { margin-top: 10px; display: flex; gap: 10px; }
+  .btn { border: 1px solid #cbd5e1; background: #fff; border-radius: 7px; padding: 4px 12px; font-size: 14px; }
+  .btn.primary { border-color: #93c5fd; background: #dbeafe; font-weight: 600; }
+  ul { margin: 8px 0 8px 20px; padding: 0; }
+  li { margin: 4px 0; }
+  a { color: #1d4ed8; }
+  footer { max-width: 760px; margin: 22px auto 0; color: #6b7280; font-size: 13px; text-align: center; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0f1115; color: #e5e7eb; }
+    main { background: #171a21; box-shadow: none; }
+    .sub, footer { color: #9ca3af; }
+    h2 { border-top-color: #2a2f3a; }
+    code, .kbd { background: #1e2536; border-color: #334155; }
+    .dialog { background: #1f232b; border-color: #333a46; }
+    .btn { background: #22262f; border-color: #3a4150; color: #e5e7eb; }
+    .btn.primary { background: #1e3a8a; border-color: #3b82f6; }
+    a { color: #93c5fd; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Installer Cartes vers Anki sur Mac</h1>
+  <p class="sub">Guide pas à pas. Compte environ dix minutes, et garde cette page ouverte pendant l'installation.</p>
+
+  <div class="ok">
+    <strong>Ce que tu vas installer.</strong> Une extension de navigateur qui envoie les cartes
+    générées par ChatGPT directement dans Anki, sans copier-coller. Elle fonctionne uniquement sur
+    ton ordinateur et ne parle qu'à Anki. Aucun compte, aucun envoi vers Internet, aucune clé d'API.
+  </div>
+
+  <h2>Avant de commencer</h2>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <p><strong>Vérifie la provenance.</strong> Ce dossier doit venir du dépôt officiel :</p>
+    <p><a href="https://github.com/pyxl-dev/cartes-vers-anki">github.com/pyxl-dev/cartes-vers-anki</a></p>
+    <p>Si tu l'as reçu d'ailleurs, arrête ici et demande le lien officiel.</p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <p><strong>Installe Anki.</strong> Télécharge-le sur <a href="https://apps.ankiweb.net/">apps.ankiweb.net</a>,
+    ouvre le fichier téléchargé et laisse l'installation se faire.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <p><strong>Ajoute le greffon AnkiConnect.</strong> Ouvre Anki, puis :</p>
+    <p><span class="kbd">Outils</span> → <span class="kbd">Greffons</span> → <span class="kbd">Obtenir des greffons</span>,
+    et saisis le code <code>2055492159</code>.</p>
+    <p>Quitte Anki complètement et relance-le.</p>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <p><strong>Installe Brave</strong> (ou Chrome, ou Edge) depuis <a href="https://brave.com/fr/download/">brave.com</a>.</p>
+  </div></div>
+
+  <h2>L'avertissement de macOS, à lire avant de double-cliquer</h2>
+
+  <p>L'installateur est un petit script. Il n'est pas signé par Apple, donc macOS affiche un
+  avertissement la première fois. <strong>C'est normal et attendu.</strong> Voici exactement la
+  fenêtre que tu vas voir, et ce qu'il faut faire.</p>
+
+  <div class="dialog">
+    <div class="title">Élément « Installer Cartes vers Anki.command » non ouvert</div>
+    <div>Apple n'a pas pu confirmer que ce logiciel ne contient pas de logiciel malveillant.</div>
+    <div class="buttons"><span class="btn">Placer dans la corbeille</span><span class="btn primary">Terminé</span></div>
+  </div>
+
+  <div class="danger">
+    <strong>Ne clique pas sur « Placer dans la corbeille ».</strong> Ce bouton enverrait le fichier à la
+    poubelle : ce n'est pas une erreur de ta part, mais tu devrais le retélécharger.
+    Clique sur <strong>« Terminé »</strong>.
+  </div>
+
+  <div class="step"><div class="num">5</div><div class="body">
+    <p><strong>Clique « Terminé »</strong> dans cette fenêtre. Elle se ferme, et rien d'autre ne se passe pour l'instant.</p>
+  </div></div>
+
+  <div class="step"><div class="num">6</div><div class="body">
+    <p><strong>Ouvre les réglages de sécurité.</strong> Menu <span class="kbd"> Pomme</span> (en haut à gauche) →
+    <span class="kbd">Réglages Système</span> → <span class="kbd">Confidentialité et sécurité</span>.</p>
+    <p>Descends jusqu'à la section <strong>Sécurité</strong>. Tu y trouves une phrase au sujet de
+    « Installer Cartes vers Anki.command », avec un bouton <strong>« Ouvrir quand même »</strong>.</p>
+  </div></div>
+
+  <div class="step"><div class="num">7</div><div class="body">
+    <p><strong>Clique « Ouvrir quand même »</strong>, puis confirme. macOS peut demander ton mot de
+    passe ou Touch ID : c'est macOS qui le demande, pas l'extension, et rien n'est envoyé nulle part.</p>
+    <p>Retourne ensuite dans le dossier et <strong>double-clique à nouveau</strong> l'installateur.
+    Cette fois, il s'exécute normalement.</p>
+  </div></div>
+
+  <div class="alert">
+    <h3>Si le bouton « Ouvrir quand même » n'apparaît pas</h3>
+    <ul>
+      <li>Refais d'abord un double-clic sur le fichier : c'est cette tentative qui fait apparaître le bouton.</li>
+      <li>Reviens dans <span class="kbd">Confidentialité et sécurité</span> → <span class="kbd">Sécurité</span> et regarde à nouveau.</li>
+      <li>Le bouton ne reste disponible qu'environ <strong>une heure</strong> après la tentative. Si tu as attendu
+      plus longtemps, refais un double-clic puis reviens.</li>
+      <li>Sur un Mac géré par une école ou une entreprise, ou avec un <strong>contrôle parental</strong> actif,
+      ce bouton peut être absent : il faut alors l'autorisation de la personne qui administre l'ordinateur.</li>
+    </ul>
+  </div>
+
+  <h2>Ensuite, l'installation elle-même</h2>
+
+  <div class="step"><div class="num">8</div><div class="body">
+    <p><strong>Double-clique <span class="kbd">Installer Cartes vers Anki.command</span>.</strong></p>
+    <p>Une fenêtre de Terminal s'ouvre et déroule l'installation. Tu n'as rien à taper : lis et laisse faire.
+    À la fin, appuie sur Entrée pour fermer la fenêtre.</p>
+    <p>Le script installe une copie permanente dans <code>~/Applications/Cartes vers Anki Beta</code>
+    et pose un raccourci <strong>« Mettre à jour Cartes vers Anki »</strong> sur ton Bureau.</p>
+  </div></div>
+
+  <div class="step"><div class="num">9</div><div class="body">
+    <p><strong>Charge l'extension dans Brave.</strong> Le script ouvre la bonne page ; sinon, va sur
+    <code>brave://extensions</code>.</p>
+    <p>Active <span class="kbd">Mode développeur</span> (interrupteur en haut à droite), clique
+    <span class="kbd">Charger l'extension non empaquetée</span>, et choisis le dossier :</p>
+    <p><code>~/Applications/Cartes vers Anki Beta/extension</code></p>
+  </div></div>
+
+  <div class="step"><div class="num">10</div><div class="body">
+    <p><strong>Essaie.</strong> Ouvre Anki, puis ChatGPT.com. Sur une réponse qui contient un bloc JSON,
+    un bouton « Ajouter N cartes à Anki » apparaît. Clique dessus, vérifie les cartes, choisis ton paquet,
+    et importe.</p>
+  </div></div>
+
+  <h2>Les mises à jour, plus tard</h2>
+
+  <div class="step"><div class="num">11</div><div class="body">
+    <p>Quand une nouvelle version sort : <strong>double-clique « Mettre à jour Cartes vers Anki »</strong>
+    sur ton Bureau, puis clique <span class="kbd">Actualiser</span> (la flèche circulaire) sur la carte de
+    l'extension dans <code>brave://extensions</code>, et recharge la page ChatGPT.</p>
+    <p>L'avertissement de macOS ne revient pas : il ne concerne que le premier lancement.</p>
+  </div></div>
+
+  <h2>En cas de problème</h2>
+  <ul>
+    <li><strong>Le double-clic ouvre un éditeur de texte au lieu de lancer le script.</strong> Le dossier
+    vient d'une archive ZIP qui n'a pas conservé le droit d'exécution. Fais un clic droit sur le fichier →
+    <em>Ouvrir avec</em> → <strong>Terminal</strong>. Ce geste ne sert qu'une fois.</li>
+    <li><strong>Rien ne se passe après le double-clic.</strong> Refais-le, puis reviens dans
+    <span class="kbd">Confidentialité et sécurité</span> → <span class="kbd">Sécurité</span>.</li>
+    <li><strong>Anki n'est pas détecté par l'extension.</strong> Vérifie qu'Anki est ouvert, et que le
+    greffon AnkiConnect (code <code>2055492159</code>) est bien installé. Le port se règle dans la fenêtre
+    de l'extension si besoin.</li>
+    <li><strong>Envie d'annuler ?</strong> Supprime le dossier
+    <code>~/Applications/Cartes vers Anki Beta</code> et retire l'extension depuis
+    <code>brave://extensions</code>. Tes cartes et ton historique dans Anki ne sont jamais touchés par
+    cette installation.</li>
+  </ul>
+
+  <div class="ok">
+    <strong>Ce que ce guide ne fait pas, volontairement.</strong> Il ne désactive aucune protection de
+    macOS et ne demande jamais de mot de passe. L'autorisation de l'étape 7 est une décision que tu prends
+    toi-même, dans les réglages d'Apple. L'installateur, lui, ne fait que télécharger le dépôt officiel :
+    aucun contenu de tes cours n'est lu ni transmis, et il ne touche ni à Anki, ni à tes cartes, ni à ton
+    historique de révision.
+  </div>
+
+  <h2>Pour aller plus loin</h2>
+  <ul>
+    <li>Apple — ouvrir une app d'un développeur non identifié :
+      <a href="https://support.apple.com/fr-fr/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac">support.apple.com</a></li>
+    <li>Apple — signature et notarisation (documentation développeur) :
+      <a href="https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution">developer.apple.com</a></li>
+    <li>Mode d'emploi détaillé du kit : <a href="macos/LISEZ-MOI.md">macos/LISEZ-MOI.md</a></li>
+    <li>Notes techniques sur une distribution signée : <a href="macos/NOTARISATION.md">macos/NOTARISATION.md</a></li>
+  </ul>
+
+</main>
+<footer>Cartes vers Anki — page locale, sans script distant ni mesure d'audience.</footer>
+</body>
+</html>
