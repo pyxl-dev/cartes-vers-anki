@@ -7,8 +7,40 @@ const api=(type, extra={}) => new Promise((resolve,reject)=>{
     resolve(r.value);
   });
 });
-const status=t=>{ $('status').textContent=t; };
-// Le port peut venir d'un choix explicite de l'utilisateur ou d'une détection automatique.
+
+/* ---------------------------------------------------------------------------
+   Deux zones de retour DISTINCTES, volontairement séparées :
+   - l'état de connexion vit dans l'en-tête (`connState`), mis à jour seulement
+     par les opérations de connexion ;
+   - le message d'action (`status`) rend compte de la préparation du prompt, de
+     la vérification des doublons ou d'un import.
+   Ainsi, un échec de préparation de prompt n'efface jamais « Anki connecté ».
+--------------------------------------------------------------------------- */
+const setConn=(kind,text)=>{
+  $('connDot').className='dot '+kind;
+  $('connState').textContent=text;
+  // Le bouton de reprise n'apparaît que lorsque quelque chose est à reprendre.
+  $('retry').hidden=(kind!=='bad');
+};
+// Chaque message porte sa SOURCE et un numéro d'ordre. Une reprise de connexion
+// ne peut effacer qu'un message d'erreur de connexion encore affiché : un compte
+// rendu d'action arrivé entre-temps n'est jamais détruit.
+let feedbackSeq=0, feedbackSource=null, lastConnSeq=-1;
+const feedback=(msg,kind='',source='action')=>{
+  const el=$('status');
+  el.textContent=msg;
+  el.className='feedback'+(kind?' '+kind:'');
+  feedbackSource = msg ? source : null;
+  feedbackSeq++;
+  if(msg && source==='connection') lastConnSeq=feedbackSeq;
+};
+const clearConnFeedback=()=>{
+  if(feedbackSource==='connection' && feedbackSeq===lastConnSeq) feedback('');
+};
+// Détail technique : visible uniquement dans le bloc de dépannage, jamais dans
+// la vue normale. Le message d'action reste court et actionnable.
+const setTech=msg=>{ const el=$('techDetail'); if(el)el.textContent = msg ? `Détail technique : ${msg}` : ''; };
+
 let portIsManual=false;
 async function loadPort() {
   const info=await api('PORT_INFO');
@@ -16,6 +48,8 @@ async function loadPort() {
   $('ankiPort').value=String(info.port);
   return info;
 }
+
+/* --- Réglages : port manuel et retour à la détection automatique ---------- */
 $('savePort').onclick=async()=>{
   try {
     const raw=$('ankiPort').value.trim();
@@ -25,19 +59,20 @@ $('savePort').onclick=async()=>{
     await api('SET_PORT',{port});
     portIsManual=true;
     invalidate();
-    status(`Port ${port} enregistré. Ce port doit être identique dans AnkiConnect. Test de connexion...`);
-    await loadPort().then(refresh).catch(e=>status(`Initialisation impossible : ${e.message}`));
-  } catch(e) {status(`Port non enregistré : ${e.message}`);}
+    feedback(`Port ${port} enregistré. Test de la connexion…`);
+    await loadPort().then(refresh).catch(e=>feedback(`Initialisation impossible : ${e.message}`,'error'));
+  } catch(e) {feedback(`Port non enregistré : ${e.message}`,'error');}
 };
-// Revenir à la détection automatique (8765 puis 8766), sans rien saisir.
 $('autoPort').onclick=async()=>{
   try {
     await api('CLEAR_PORT');
     invalidate();
-    status('Détection automatique du port d’AnkiConnect...');
-    await loadPort().then(refresh).catch(e=>status(`Détection impossible : ${e.message}`));
-  } catch(e) {status(`Détection impossible : ${e.message}`);}
+    feedback('Recherche automatique du port d’AnkiConnect…');
+    await loadPort().then(refresh).catch(e=>feedback(`Détection impossible : ${e.message}`,'error'));
+  } catch(e) {feedback(`Détection impossible : ${e.message}`,'error');}
 };
+
+/* --- Secours JSON : recherche de paquet, vérification, import ------------ */
 let analyzed=null;
 const invalidate=()=>{ analyzed=null;$('import').disabled=true;$('analysis').replaceChildren(); };
 // Recherche de paquet : casse et accents ignorés, sur le chemin complet.
@@ -59,12 +94,19 @@ $('deckSearch').addEventListener('input',()=>{
   fillDecks(kept);
   // Toute modification de recherche périme l'analyse précédente.
   invalidate();
-  status(kept.length?`${kept.length} paquet(s) correspondant(s). Le paquet sélectionné est conservé.`
+  feedback(kept.length?`${kept.length} paquet(s) correspondant(s).`
     :'Aucun paquet ne correspond : la destination actuelle est conservée.');
 });
+
+/* --- Connexion à Anki ---------------------------------------------------- */
 async function refresh(){
+  setConn('unknown','Vérification…');
   try{
     await api('CONNECT');
+    // Une détection automatique peut changer le port réellement utilisé : la
+    // valeur affichée est remise à jour, sauf si l'utilisateur est en train de
+    // la saisir. Un port fixé manuellement reste prioritaire (PORT_INFO le dit).
+    try{ if(document.activeElement!==$('ankiPort')) await loadPort(); }catch{}
     const decks=await api('DECKS');
     const saved=await chrome.storage.local.get('deck');
     const previous=$('deck').value;
@@ -75,21 +117,31 @@ async function refresh(){
     const wanted=[saved.deck,previous].find(v=>v&&decks.includes(v));
     $('deck').value=wanted||decks[0]||'';
     invalidate();
-    status(decks.length
-      ? `Anki connecté sur le port ${$('ankiPort').value}`
-        +(portIsManual?' (port choisi manuellement)':' (détecté automatiquement)')
-        +`. ${decks.length} paquet(s) disponible(s).`
-      : 'Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.');
-  }catch(e){status(`Connexion impossible : ${e.message}`);}
+    setConn('ok', decks.length ? `Anki connecté · ${decks.length} paquet(s)` : 'Anki connecté');
+    // Une connexion réussie efface l'ancien message d'échec de connexion, mais
+    // jamais le compte rendu d'une action (prompt, vérification, import).
+    clearConnFeedback();
+    setTech('');
+    if(!decks.length)feedback('Anki est connecté mais aucun paquet n’existe : crée un paquet dans Anki.','','connection');
+  }catch(e){
+    setConn('bad','Anki non détecté');
+    $('deck').replaceChildren();
+    invalidate();
+    // Message court et actionnable ; le détail technique va dans les réglages.
+    feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error','connection');
+    setTech(e && e.message ? e.message : String(e));
+  }
 }
+$('retry').onclick=refresh;
+$('refresh').onclick=refresh;
 $('deck').addEventListener('change',invalidate);
 $('json').addEventListener('input',invalidate);
-$('refresh').onclick=refresh;
+
 $('sample').onclick=()=>{
   $('json').value=JSON.stringify({cards:[
     {type:'basic',front:'Quel organe produit l’insuline ?',back:'Les cellules β des îlots de Langerhans, dans le pancréas.',tags:['demo_medecine']},
     {type:'cloze',text:'L’insuline est produite par les {{c1::cellules β}} du {{c2::pancréas}}.',extra:'Carte de démonstration.'}
-  ]},null,2);invalidate();status('Exemple chargé. Choisis un paquet pour tester.');
+  ]},null,2);invalidate();feedback('Exemple chargé. Choisis un paquet pour tester.');
 };
 $('review').onclick=async()=>{
   $('review').disabled=true; invalidate();
@@ -97,7 +149,7 @@ $('review').onclick=async()=>{
     const cards=AnkiCards.toCards($('json').value);
     const deck=$('deck').value;
     if(!deck)throw new Error('Sélectionne un paquet Anki.');
-    status(`Recherche des cartes existantes pour « ${deck} »...`);
+    feedback(`Recherche des cartes existantes pour « ${deck} »…`);
     const report=await api('ANALYZE',{deck,cards});
     analyzed={cards,deck,items:report.items};
     report.items.forEach((r,i)=>{
@@ -124,11 +176,11 @@ $('review').onclick=async()=>{
     });
     const exact=report.items.filter(x=>x.kind==='exact').length;
     const similar=report.items.filter(x=>x.kind==='similar').length;
-    status(`${report.totalExisting} notes existantes, ${report.scanned} comparées : ${exact} doublon(s) exact(s), ${similar} ressemblance(s).`+
+    feedback(`${report.totalExisting} notes existantes, ${report.scanned} comparées : ${exact} doublon(s) exact(s), ${similar} ressemblance(s).`+
       (report.partial?' Analyse de similarité PARTIELLE (plus de 20 000 notes).':'')+
       '\nLes ressemblances lexicales sont seulement des alertes ; vérifie les faits médicaux.');
     $('import').disabled=false;
-  }catch(e){status(`Vérification impossible : ${e.message}`);}
+  }catch(e){feedback(`Vérification impossible : ${e.message}`,'error');}
   finally{$('review').disabled=false;}
 };
 $('import').onclick=async()=>{
@@ -140,18 +192,19 @@ $('import').onclick=async()=>{
     if(!cards.length)throw new Error('Aucune carte sélectionnée.');
     if(!confirm(`Importer ${cards.length} carte(s) dans « ${analyzed.deck} » ?`))return;
     await chrome.storage.local.set({deck:analyzed.deck});
-    status(`Import en cours (${cards.length} carte(s))...`);
+    feedback(`Import en cours (${cards.length} carte(s))…`);
     const r=await api('IMPORT',{deck:analyzed.deck,cards});
-    status(`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).${r.errors.length?'\n'+r.errors.join('\n'):''}`);
+    feedback(`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).${r.errors.length?'\n'+r.errors.join('\n'):''}`,'ok');
     invalidate();
-  }catch(e){status(`Erreur : ${e.message}`);}
+  }catch(e){feedback(`Erreur : ${e.message}`,'error');}
   finally{$('import').disabled=!analyzed;}
 };
-loadPort().then(refresh).catch(e=>status(`Initialisation impossible : ${e.message}`));
 
-
-// Parcours normal : prépare le prompt dans l'éditeur ChatGPT. Le JSON est technique
-// et sera interprété automatiquement par le bouton d'import injecté sous la réponse.
+/* ---------------------------------------------------------------------------
+   Action principale : préparer le prompt dans ChatGPT.
+   Elle ne dépend PAS d'Anki : l'utilisateur peut préparer sa demande même si
+   Anki est momentanément fermé. L'état de connexion reste affiché à part.
+--------------------------------------------------------------------------- */
 function buildMedicalPrompt(count) {
   return `À partir du cours que j’ai joint ou fourni dans cette conversation, crée ${count} flashcards Anki pour mes révisions de médecine. Si tu n’as pas reçu le cours, demande-moi de le fournir avant de générer.
 
@@ -165,7 +218,7 @@ $('composePrompt').onclick=async()=>{
     const count=Number($('cardCount').value);
     if(![10,20,30,50].includes(count))throw new Error('Nombre de cartes non valide.');
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    if(!tab?.id)throw new Error('Aucun onglet ChatGPT actif.');
+    if(!tab?.id)throw new Error('Aucun onglet actif.');
     const response=await new Promise((resolve,reject)=>{
       chrome.tabs.sendMessage(tab.id,{type:'ANKI_INSERT_PROMPT',prompt:buildMedicalPrompt(count)},r=>{
         if(chrome.runtime.lastError)return reject(new Error(chrome.runtime.lastError.message));
@@ -173,7 +226,15 @@ $('composePrompt').onclick=async()=>{
       });
     });
     if(!response?.ok)throw new Error(response?.error||'Éditeur ChatGPT non trouvé.');
-    status('Demande insérée dans ChatGPT. Vérifie-la puis envoie-la. Le bouton Ajouter à Anki apparaîtra sous les cartes.');
-  }catch(e){status(`Ouvre d’abord chatgpt.com dans cet onglet, puis réessaie. Détail : ${e.message}`);}
+    feedback('Demande insérée dans ChatGPT. Envoie-la : le bouton « Ajouter à Anki » apparaîtra sous les cartes.','ok');
+  }catch(e){feedback(`Ouvre chatgpt.com dans cet onglet, puis réessaie. (${e.message})`,'error');}
   finally{btn.disabled=false;}
 };
+
+// L'interface est utilisable immédiatement : la connexion se vérifie ensuite,
+// sans bloquer l'action principale.
+loadPort().then(refresh).catch(e=>{
+  setConn('bad','Anki non détecté');
+  feedback('Ouvre Anki (avec AnkiConnect), puis clique Réessayer.','error','connection');
+  setTech(e && e.message ? e.message : String(e));
+});

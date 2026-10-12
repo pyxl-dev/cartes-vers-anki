@@ -329,10 +329,11 @@ class El {
   _matchesSimple(sel) {
     sel = sel.trim(); if (!sel) return false;
     if (sel === '*') return this.tagName !== '#TEXT';
-    const m = sel.match(/^([a-zA-Z#][a-zA-Z0-9-]*)?((?:[.#][\w-]+)*)((?:\[[^\]]+\])*)$/);
+    const m = sel.match(/^([a-zA-Z#][a-zA-Z0-9-]*)?((?:[.#][\w-]+)*)((?:\[[^\]]+\])*)(:checked)?$/);
     if (!m) return false;
-    const [, tag, classes, attrs] = m;
+    const [, tag, classes, attrs, pseudo] = m;
     if (tag && this.tagName !== tag.toUpperCase()) return false;
+    if (pseudo === ':checked' && !this.checked) return false;
     for (const c of (classes.match(/\.[\w-]+/g) || [])) if (!this._classes().includes(c.slice(1))) return false;
     for (const a of (attrs.match(/\[[^\]]+\]/g) || [])) {
       const [k, v] = a.slice(1, -1).split('=');
@@ -1399,6 +1400,382 @@ async function replaceTests() {
 /* ------------------------------------------------------------------ *
  * 5. Cohérence manifeste / code                                      *
  * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * Harnais du popup : on analyse le VRAI popup.html pour que les tests *
+ * portent sur la structure réellement livrée, pas sur une copie.      *
+ * ------------------------------------------------------------------ */
+const VOID_TAGS = new Set(['meta','input','br','img','link','hr','source','area','base','col','embed','param','track','wbr']);
+function parseAttrs(src) {
+  const out = {};
+  const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+  let m;
+  while ((m = re.exec(src))) {
+    out[m[1].toLowerCase()] = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4] !== undefined ? m[4] : '';
+  }
+  return out;
+}
+function parseHTML(src) {
+  // Le contenu de <style> et <script> contient des « > » : on le neutralise
+  // avant de tokeniser, sinon il serait pris pour des balises.
+  const clean = String(src)
+    .replace(/<style[\s\S]*?<\/style>/gi, '<style></style>')
+    .replace(/<script[\s\S]*?<\/script>/gi, '<script></script>')
+    .replace(/<!--[\s\S]*?-->/g, '');
+  const root = new El('#root');
+  const stack = [root];
+  const re = /<\/([a-zA-Z0-9]+)\s*>|<([a-zA-Z0-9]+)((?:\s+[^>]*?)?)(\/?)>|([^<]+)/g;
+  let m;
+  while ((m = re.exec(clean))) {
+    if (m[1]) {
+      const tag = m[1].toUpperCase();
+      for (let i = stack.length - 1; i > 0; i--) { if (stack[i].tagName === tag) { stack.length = i; break; } }
+    } else if (m[2]) {
+      const tag = m[2].toLowerCase();
+      const attrs = parseAttrs(m[3] || '');
+      const el = new El(tag, attrs);
+      stack[stack.length - 1].append(el);
+      if (!VOID_TAGS.has(tag) && m[4] !== '/') stack.push(el);
+    } else if (m[5] !== undefined) {
+      const t = m[5].trim();
+      if (t) stack[stack.length - 1].append(t);
+    }
+  }
+  return root;
+}
+// Texte visible : le contenu d'un bloc replié est masqué, mais son RÉSUMÉ reste
+// affiché dans un navigateur — on le traverse donc.
+function visibleText(node) {
+  let out = '';
+  const walk = n => {
+    if (n.tagName === '#TEXT') { out += (n._text || '') + ' '; return; }
+    if (n.tagName === 'DETAILS') {
+      for (const c of n.children) if (c.tagName === 'SUMMARY') walk(c);
+      return;
+    }
+    for (const c of n.children) walk(c);
+  };
+  for (const c of node.children) walk(c);
+  return out;
+}
+function popupHarness(respond, opts = {}) {
+  const doc = parseHTML(fs.readFileSync(EXT('popup.html'), 'utf8'));
+  // Comme dans un vrai navigateur : la valeur d'un <select> vient de son option
+  // sélectionnée (ou de la première). Le shim ne le fait pas tout seul.
+  for (const sel of doc.querySelectorAll('select')) {
+    const options = sel.querySelectorAll('option');
+    const chosen = options.find(o => o.hasAttribute('selected')) || options[0];
+    sel.value = chosen ? (chosen.getAttribute('value') || '') : '';
+  }
+  const sent = [];
+  const tabMessages = [];
+  const ctx = {
+    console, setTimeout, clearTimeout, Date, JSON, Promise, Number, Set, String, Math, RegExp, Error,
+    document: {
+      getElementById: id => doc.querySelector('[id="' + id + '"]'),
+      querySelector: s => doc.querySelector(s),
+      querySelectorAll: s => doc.querySelectorAll(s),
+      createElement: tag => new El(tag),
+      createTextNode: t => new El('#text', {}, t),
+      addEventListener: () => {}
+    },
+    confirm: () => (opts.confirm === undefined ? true : opts.confirm),
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage: (msg, cb) => { sent.push(msg); const r = respond(msg); if (r && typeof r.then === 'function') r.then(cb); else cb(r); }
+      },
+      tabs: {
+        query: async () => (opts.tabs === undefined ? [{ id: 7 }] : opts.tabs),
+        sendMessage: (tabId, msg, cb) => {
+          tabMessages.push({ tabId, msg });
+          const r = opts.tabReply === undefined ? { ok: true } : opts.tabReply;
+          if (r && typeof r.then === 'function') r.then(cb); else cb(r);
+        }
+      },
+      storage: { local: { get: async () => ({ deck: opts.savedDeck === undefined ? 'Cours' : opts.savedDeck }), set: async () => {} } }
+    }
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  load(ctx, 'cards.js');
+  load(ctx, 'popup.js');
+  const $ = id => doc.querySelector('[id="' + id + '"]');
+  return { ctx, doc, sent, tabMessages, $ };
+}
+const popupOk = (decks = ['Cours', 'Par défaut']) => msg => {
+  if (msg.type === 'PORT_INFO') return { ok: true, value: { port: 8766, manual: false } };
+  if (msg.type === 'CONNECT') return { ok: true, value: true };
+  if (msg.type === 'DECKS') return { ok: true, value: decks };
+  if (msg.type === 'ANALYZE') return { ok: true, value: { items: [{ kind: 'new', duplicates: [] }], totalExisting: 0, scanned: 0, partial: false, scope: 'Cours' } };
+  if (msg.type === 'IMPORT') return { ok: true, value: { added: 1, skipped: 0, errors: [], total: 1 } };
+  return { ok: false, error: 'action inattendue ' + msg.type };
+};
+const settle = () => new Promise(r => setTimeout(r, 60));
+
+async function popupTests() {
+  await ta('popup : la vue normale n’expose aucun réglage technique', async () => {
+    const { doc, $ } = popupHarness(popupOk());
+    await settle();
+    assert.equal($('settings').open, false, 'le bloc réglages doit être replié');
+    assert.equal($('fallback').open, false, 'le bloc de secours doit être replié');
+    for (const id of ['ankiPort', 'savePort', 'autoPort', 'json', 'review', 'import', 'deck']) {
+      const d = $(id).closest('details');
+      assert.ok(d, `${id} doit vivre dans un bloc replié`);
+      assert.equal(d.open, false, `${id} ne doit pas être visible au chargement`);
+    }
+    const visible = visibleText($('settings').parentElement);
+    // Les résumés des blocs repliés restent visibles : ils ne doivent pas
+    // contenir de jargon technique.
+    assert.match(visible, /Réglages et dépannage/, 'le résumé des réglages reste visible');
+    assert.match(visible, /Import manuel \(secours\)/, 'le résumé du secours reste visible');
+    for (const mot of ['webBindPort', 'Port AnkiConnect', 'quota', 'JSON', '8765', '8766']) {
+      assert.ok(!visible.includes(mot), `« ${mot} » ne doit pas apparaître dans la vue normale`);
+    }
+  });
+  await ta('popup : une seule action principale, sélecteur compact 10/20/30/50', async () => {
+    const { doc, $ } = popupHarness(popupOk());
+    await settle();
+    assert.equal(doc.querySelectorAll('button.primary').length, 1, 'une seule action principale');
+    assert.equal($('composePrompt').textContent, 'Préparer dans ChatGPT');
+    assert.deepEqual($('cardCount').querySelectorAll('option').map(o => o.getAttribute('value')), ['10', '20', '30', '50']);
+    assert.equal($('cardCount').value, '20', '20 cartes par défaut');
+    assert.equal(doc.querySelectorAll('.hint').length, 1, 'une seule ligne d’aide');
+    // Le libellé de l'action ne doit pas être répété (titre + bouton).
+    const vtxt = visibleText(doc.querySelector('main'));
+    assert.equal((vtxt.match(/Préparer dans ChatGPT/g) || []).length, 1, 'une seule occurrence visible de l’action');
+  });
+  await ta('popup : état de connexion séparé du message d’action', async () => {
+    const { $ } = popupHarness(popupOk());
+    await settle();
+    assert.match($('connState').textContent, /Anki connecté/, 'connexion affichée');
+    assert.equal($('retry').hidden, true, 'pas de bouton de reprise quand tout va bien');
+    // Un échec de préparation de prompt ne doit PAS écraser l'état de connexion.
+    const { $: $2 } = popupHarness(popupOk(), { tabs: [] });
+    await settle();
+    $2('composePrompt').onclick();
+    await settle();
+    assert.match($2('connState').textContent, /Anki connecté/, 'l’état de connexion reste intact');
+    assert.match($2('status').textContent, /chatgpt\.com/, 'le message d’action explique quoi faire');
+  });
+  await ta('popup : Anki indisponible -> état court, reprise visible, action principale utilisable', async () => {
+    const respond = msg => msg.type === 'CONNECT' ? { ok: false, error: 'AnkiConnect injoignable' } : popupOk()(msg);
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.equal($('connState').textContent, 'Anki non détecté');
+    assert.equal($('retry').hidden, false, 'le bouton Réessayer doit apparaître');
+    assert.match($('status').textContent, /Ouvre Anki/);
+    assert.equal($('composePrompt').disabled, false, 'préparer le prompt ne dépend pas d’Anki');
+    assert.equal($('deck').value, '', 'pas de paquet obsolète conservé');
+  });
+  await ta('popup : le port reste réglable après dépliage (PORT_INFO / SET_PORT / CLEAR_PORT)', async () => {
+    const { $, sent } = popupHarness(popupOk());
+    await settle();
+    assert.equal($('ankiPort').value, '8766', 'port courant chargé');
+    $('settings').open = true;
+    $('ankiPort').value = '9123';
+    $('savePort').onclick();
+    await settle();
+    const setPort = sent.find(m => m.type === 'SET_PORT');
+    assert.ok(setPort, 'SET_PORT doit être envoyé');
+    assert.equal(setPort.port, 9123);
+    $('autoPort').onclick();
+    await settle();
+    assert.ok(sent.some(m => m.type === 'CLEAR_PORT'), 'CLEAR_PORT doit être envoyé');
+  });
+  await ta('popup : le port invalide est refusé sans rien envoyer', async () => {
+    const { $, sent } = popupHarness(popupOk());
+    await settle();
+    const before = sent.length;
+    $('settings').open = true;
+    $('ankiPort').value = 'abc';
+    $('savePort').onclick();
+    await settle();
+    assert.equal(sent.length, before, 'aucun message envoyé pour un port invalide');
+    assert.match($('status').textContent, /port entier/);
+  });
+  await ta('popup : préparer le prompt envoie la demande au bon onglet', async () => {
+    const { $, tabMessages } = popupHarness(popupOk());
+    await settle();
+    $('composePrompt').onclick();
+    await settle();
+    assert.equal(tabMessages.length, 1, 'un seul message à l’onglet');
+    assert.equal(tabMessages[0].tabId, 7);
+    assert.equal(tabMessages[0].msg.type, 'ANKI_INSERT_PROMPT');
+    assert.match(tabMessages[0].msg.prompt, /20 flashcards/, '20 cartes par défaut');
+    assert.match($('status').textContent, /Ajouter à Anki/, 'confirmation affichée');
+    $('cardCount').value = '50';
+    $('composePrompt').onclick();
+    await settle();
+    assert.match(tabMessages[1].msg.prompt, /50 flashcards/);
+  });
+  await ta('popup : le secours JSON reste complet et fonctionnel', async () => {
+    const { $, sent } = popupHarness(popupOk(), { confirm: true });
+    await settle();
+    $('fallback').open = true;
+    $('sample').onclick();
+    assert.match($('json').value, /"cards"/, 'l’exemple remplit la zone');
+    $('review').onclick();
+    await settle();
+    assert.ok(sent.some(m => m.type === 'ANALYZE'), 'ANALYZE doit être envoyé');
+    assert.equal($('analysis').querySelectorAll('.preview-item').length, 1, 'aperçu construit');
+    assert.equal($('import').disabled, false, 'import réactivé après vérification');
+    $('import').onclick();
+    await settle();
+    const imp = sent.find(m => m.type === 'IMPORT');
+    assert.ok(imp, 'IMPORT doit être envoyé');
+    assert.equal(imp.cards.length, 1, 'une carte sélectionnée');
+  });
+  await ta('popup : une reconnexion réussie efface le message d’erreur', async () => {
+    let injoignable = true;
+    const respond = msg => {
+      if (msg.type === 'CONNECT' && injoignable) return { ok: false, error: 'injoignable' };
+      return popupOk()(msg);
+    };
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.equal($('connState').textContent, 'Anki non détecté');
+    assert.match($('status').textContent, /Ouvre Anki/, 'erreur affichée au premier essai');
+    injoignable = false;
+    $('retry').onclick();
+    await settle();
+    assert.match($('connState').textContent, /Anki connecté/, 'reconnexion détectée');
+    assert.equal($('status').textContent, '', 'le message d’erreur doit disparaître après une reconnexion');
+    assert.equal($('retry').hidden, true, 'plus de bouton de reprise');
+  });
+  await ta('popup : une reconnexion réussie ne détruit pas un message d’action', async () => {
+    const { $ } = popupHarness(popupOk());
+    await settle();
+    $('composePrompt').onclick();
+    await settle();
+    const message = $('status').textContent;
+    assert.match(message, /Ajouter à Anki/, 'compte rendu de l’action affiché');
+    $('refresh').onclick();
+    await settle();
+    assert.equal($('status').textContent, message, 'le message d’action doit être conservé');
+  });
+  await ta('popup : une réponse de connexion tardive n’efface pas le message d’action', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    const respond = msg => {
+      if (msg.type === 'CONNECT' || msg.type === 'DECKS') return pending.then(() => popupOk()(msg));
+      return popupOk()(msg);
+    };
+    const { $ } = popupHarness(respond);
+    await settle();
+    $('composePrompt').onclick();            // action pendant que la connexion est en vol
+    await settle();
+    assert.match($('status').textContent, /Ajouter à Anki/, 'message d’action affiché');
+    release();                               // la connexion aboutit APRÈS coup
+    await settle();
+    assert.match($('status').textContent, /Ajouter à Anki/, 'la réponse tardive ne doit pas effacer le message');
+    assert.match($('connState').textContent, /Anki connecté/, 'l’état de connexion est bien mis à jour');
+  });
+  await ta('popup : une reprise tardive ne détruit pas le compte rendu d’import', async () => {
+    let release;
+    const pending = new Promise(r => { release = r; });
+    let armer = false;
+    const respond = msg => {
+      if (armer && (msg.type === 'CONNECT' || msg.type === 'DECKS')) return pending.then(() => popupOk()(msg));
+      return popupOk()(msg);
+    };
+    const { $ } = popupHarness(respond);
+    await settle();
+    $('fallback').open = true;
+    $('sample').onclick();
+    $('review').onclick();
+    await settle();
+    assert.equal($('import').disabled, false, 'import réactivé');
+    armer = true;
+    $('import').onclick();
+    await settle();
+    const compte = $('status').textContent;
+    assert.match(compte, /ajoutée/, 'compte rendu d’import affiché');
+    $('refresh').onclick();                  // une reprise de connexion arrive après
+    await settle();
+    release();
+    await settle();
+    assert.equal($('status').textContent, compte, 'le compte rendu d’import est conservé');
+  });
+  await ta('popup : le port affiché suit une nouvelle détection automatique', async () => {
+    let port = 8765;
+    const respond = msg => msg.type === 'PORT_INFO' ? { ok: true, value: { port, manual: false } } : popupOk()(msg);
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.equal($('ankiPort').value, '8765', 'port initial affiché');
+    port = 8766;                             // AnkiConnect re-détecté ailleurs
+    $('retry').onclick();
+    await settle();
+    assert.equal($('ankiPort').value, '8766', 'le panneau doit refléter le nouveau port');
+  });
+  await ta('popup : un port fixé manuellement n’est pas écrasé', async () => {
+    const respond = msg => msg.type === 'PORT_INFO' ? { ok: true, value: { port: 9123, manual: true } } : popupOk()(msg);
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.equal($('ankiPort').value, '9123');
+    $('refresh').onclick();
+    await settle();
+    assert.equal($('ankiPort').value, '9123', 'le port manuel reste affiché');
+  });
+  await ta('popup : le détail technique reste confiné au bloc de dépannage', async () => {
+    let injoignable = true;
+    const respond = msg => {
+      if (msg.type === 'CONNECT' && injoignable) return { ok: false, error: 'AnkiConnect injoignable sur 127.0.0.1:8766' };
+      return popupOk()(msg);
+    };
+    const { $ } = popupHarness(respond);
+    await settle();
+    assert.match($('status').textContent, /Ouvre Anki/, 'message court et actionnable');
+    assert.ok(!$('status').textContent.includes('127.0.0.1'), 'aucun détail technique dans la vue normale');
+    assert.match($('techDetail').textContent, /127\.0\.0\.1:8766/, 'détail technique disponible');
+    assert.equal($('techDetail').closest('details').open, false, 'confiné dans un bloc replié');
+    assert.equal($('techDetail').getAttribute('role'), 'status');
+    injoignable = false;
+    $('retry').onclick();
+    await settle();
+    assert.equal($('techDetail').textContent, '', 'le détail est effacé après un succès');
+    assert.equal($('status').textContent, '', 'plus de message d’erreur');
+  });
+  await ta('popup : les couleurs de retour respectent le contraste en thème sombre', async () => {
+    const css = fs.readFileSync(EXT('popup.html'), 'utf8');
+    const dark = css.split('@media (prefers-color-scheme:dark)')[1] || '';
+    const lum = hex => {
+      const c = [0, 1, 2].map(i => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255)
+        .map(v => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+    const fond = '#161a20';
+    for (const nom of ['ok', 'error']) {
+      const m = dark.match(new RegExp('\\.feedback\\.' + nom + '\\{color:(#[0-9a-fA-F]{6})\\}'));
+      assert.ok(m, `couleur sombre manquante pour .feedback.${nom}`);
+      const r = ratio(m[1], fond);
+      assert.ok(r >= 4.5, `contraste ${nom} insuffisant : ${r.toFixed(2)}:1 (attendu ≥ 4.5 sur ${fond})`);
+    }
+  });
+  await ta('popup : les zones de retour sont annoncées aux lecteurs d’écran', async () => {
+    const { $ } = popupHarness(popupOk());
+    await settle();
+    assert.equal($('connState').getAttribute('role'), 'status');
+    assert.equal($('connState').getAttribute('aria-live'), 'polite');
+    assert.equal($('status').getAttribute('role'), 'status');
+    assert.equal($('status').getAttribute('aria-live'), 'polite');
+    assert.ok($('connDot').getAttribute('class').includes('dot'), 'point d’état décoratif');
+    assert.equal($('connDot').getAttribute('aria-hidden'), null);
+  });
+  await ta('popup : largeur compacte et absence de défilement dans la vue normale', async () => {
+    const html = fs.readFileSync(EXT('popup.html'), 'utf8');
+    const w = Number((html.match(/body\{[^}]*width:(\d+)px/) || [])[1]);
+    assert.ok(w >= 320 && w <= 360, `largeur attendue entre 320 et 360 px, obtenu ${w}`);
+    // La vue normale ne doit contenir aucune zone défilante : les seules règles
+    // `overflow:auto` doivent viser l'aperçu du mode de secours, qui est replié.
+    const head = html.split('<body>')[0];
+    for (const rule of (head.match(/[^{}]+\{[^}]*overflow:\s*auto[^}]*\}/g) || [])) {
+      assert.ok(/#analysis/.test(rule), `zone défilante hors du secours replié : ${rule.trim().slice(0, 60)}`);
+    }
+    assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(html), 'aucun émoji dans l’interface');
+  });
+}
+
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
@@ -1468,7 +1845,7 @@ function runnerVerdict({ fail, ranSections, expectedSections, declared, executed
   return { code: fail ? 1 : 0, reason: fail ? `${fail} test(s) en échec` : 'ok' };
 }
 
-const EXPECTED_SECTIONS = 6;
+const EXPECTED_SECTIONS = 7;
 const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 120000);
 let ranSections = 0;
 let suiteDone = false;
@@ -1488,6 +1865,7 @@ process.on('uncaughtException', e => { console.error('\nERREUR : exception non c
   console.log('\n=== 4. content.js : bouton et modale ==='); await contentTests(); ranSections++;
   console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests(); ranSections++;
   console.log('\n=== 6. Localisation et remplacement sûr ==='); await replaceTests(); ranSections++;
+  console.log('\n=== 7. Popup : interface compacte ==='); await popupTests(); ranSections++;
   const verdict = runnerVerdict({ fail, ranSections, expectedSections: EXPECTED_SECTIONS, declared, executed: pass + fail });
   console.log(`\nRésultat : ${pass} réussis, ${fail} échoués` + (verdict.code ? ` — ${verdict.reason}` : ''));
   suiteDone = true; clearTimeout(watchdog);
