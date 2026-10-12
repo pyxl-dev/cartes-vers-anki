@@ -159,6 +159,21 @@ fi
 TARGET="$INSTALL_DIR/macos/$UPDATER_NAME"
 LINK="$DESKTOP_DIR/$UPDATER_NAME"
 
+# La copie installée est clonée depuis la branche principale du dépôt. Tant que
+# le kit n'y est pas publié, le script de mise à jour peut être absent : dans ce
+# cas on n'installe PAS de raccourci cassé, on l'explique.
+if [ ! -f "$TARGET" ]; then
+  blank
+  say "ℹ️  Cette version publiée du dépôt ne contient pas encore le script de"
+  say "    mise à jour : aucun raccourci n'a été créé sur le Bureau."
+  say "    La mise à jour restera possible en relançant ce fichier d'installation."
+  say "    Ton extension est installée et fonctionnelle."
+  blank
+  say "Extension installée dans : $INSTALL_DIR/extension"
+  pause_end
+  exit 0
+fi
+
 if [ -d "$DESKTOP_DIR" ]; then
   if [ -L "$LINK" ]; then
     LINK_TARGET="$(readlink "$LINK" 2>/dev/null || true)"
@@ -218,8 +233,8 @@ say "  • Pour les mises à jour : double-clique « $UPDATER_NAME »"
 say "    sur le Bureau, puis clique Actualiser (↻) dans brave://extensions."
 blank
 say "Version installée : $VERSION"
-say "(Le dépôt public est actuellement en 1.4.0 ; la 1.4.2 arrivera après"
-say "sa fusion.)"
+say "Pour les prochaines versions, relance le fichier de mise à jour posé"
+say "sur le Bureau : il télécharge les nouveautés sans rien réinstaller."
 blank
 
 open_extensions_page

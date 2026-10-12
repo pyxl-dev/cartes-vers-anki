@@ -182,12 +182,27 @@ if [ -n "$LOCAL_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
 fi
 
 say "Mise à jour en cours…"
-if ! git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"; then
+
+# Avance rapide uniquement. En cas d'échec sur un clone superficiel (créé par
+# --depth 1 à l'installation), on approfondit prudemment l'historique puis on
+# retente UNE fois. Jamais de reset, jamais de force, jamais de suppression.
+ff_merge() { git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH" >/dev/null 2>&1; }
+
+if ! ff_merge; then
+  if [ -f "$REPO_DIR/.git/shallow" ]; then
+    say "Historique local incomplet : approfondissement prudent…"
+    git -C "$REPO_DIR" fetch --quiet --deepen=50 origin "$BRANCH" || true
+  fi
+fi
+
+if ! ff_merge; then
   blank
   say "❌ La mise à jour n'a pas pu être appliquée simplement."
   blank
   say "Rien n'a été supprimé, aucun reset n'a été fait."
   say "Ta copie reste utilisable en l'état."
+  say "Si le problème persiste, relance le fichier d'installation : il remet"
+  say "la copie à niveau sans rien perdre."
   pause_end
   exit 1
 fi

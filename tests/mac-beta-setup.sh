@@ -53,8 +53,21 @@ make_fixture() {
   git -C "$FIXTURE" remote add origin "$ORIGIN_BARE" 2>/dev/null || true
 }
 
-bump_fixture_to() {
-  printf '{ "manifest_version": 3, "name": "Cartes vers Anki", "version": "%s", "permissions": ["storage"] }\n' "$1" > "$FIXTURE/extension/manifest.json"
+# Dépôt publié SANS le dossier macos/ : cas de la branche principale avant que
+# le kit n'y soit publié.
+make_fixture_nokit() {
+  rm -rf "$FIXTURE" "$ORIGIN_BARE"
+  mkdir -p "$FIXTURE/extension"
+  printf '# Fixture sans kit\n' > "$FIXTURE/README.md"
+  printf '{ "manifest_version": 3, "name": "Cartes vers Anki", "version": "1.4.0", "permissions": ["storage"] }\n' > "$FIXTURE/extension/manifest.json"
+  git -C "$FIXTURE" init -q
+  git -C "$FIXTURE" symbolic-ref HEAD refs/heads/main
+  git -C "$FIXTURE" add -A
+  git -C "$FIXTURE" -c user.name=fixture -c user.email=fixture commit -q -m "fixture sans kit"
+  git clone -q --bare "$FIXTURE" "$ORIGIN_BARE"
+}
+
+bump_fixture_to() {  printf '{ "manifest_version": 3, "name": "Cartes vers Anki", "version": "%s", "permissions": ["storage"] }\n' "$1" > "$FIXTURE/extension/manifest.json"
   git -C "$FIXTURE" add -A
   git -C "$FIXTURE" -c user.name=fixture -c user.email=fixture commit -q -m "fixture $1"
   git -C "$FIXTURE" push -q origin main
@@ -64,9 +77,10 @@ bump_fixture_to() {
 # Lanceurs : environnement entièrement redirigé vers le bac à sable.
 # ---------------------------------------------------------------------------
 run_installer() {
+  target="${1:-$INSTALL}"
   CVA_HOME="$HOME_SB" \
   CVA_REPO_URL="file://$ORIGIN_BARE" \
-  CVA_INSTALL_DIR="$INSTALL" \
+  CVA_INSTALL_DIR="$target" \
   CVA_DESKTOP_DIR="$DESKTOP_SB" \
   CVA_NO_PROMPT=1 CVA_SKIP_OPEN=1 \
   bash "$INSTALLER" 2>&1
@@ -109,6 +123,7 @@ if [ -d "$INSTALL/.git" ]; then ok "installation : copie clonée"; else ko "inst
 if [ -f "$INSTALL/extension/manifest.json" ]; then ok "installation : extension présente"; else ko "installation : extension présente" "manifeste absent"; fi
 if [ "$(installed_version)" = "1.4.0" ]; then ok "installation : version lue (1.4.0)"; else ko "installation : version lue" "obtenu « $(installed_version) »"; fi
 if [ -x "$INSTALL/macos/Mettre à jour Cartes vers Anki.command" ]; then ok "installation : script de MAJ exécutable"; else ko "installation : script de MAJ exécutable" "bit x absent"; fi
+if [ -f "$INSTALL/.git/shallow" ]; then ok "installation : clone réellement superficiel (--depth 1)"; else ko "installation : clone réellement superficiel" "pas de .git/shallow : le test ne couvrirait pas le cas réel"; fi
 if [ -L "$DESKTOP_SB/Mettre à jour Cartes vers Anki.command" ]; then ok "raccourci Bureau créé (lien)"; else ko "raccourci Bureau créé" "absent"; fi
 LINK_T="$(readlink "$DESKTOP_SB/Mettre à jour Cartes vers Anki.command" 2>/dev/null || true)"
 if [ "$LINK_T" = "$INSTALL/macos/Mettre à jour Cartes vers Anki.command" ]; then ok "raccourci : délègue au script installé"; else ko "raccourci : délègue au script installé" "cible « $LINK_T »"; fi
@@ -141,6 +156,17 @@ echo
 echo "--- 5. Déjà à jour ---"
 OUT="$(run_updater)"; CODE=$?
 if [ "$CODE" -eq 0 ] && printf '%s' "$OUT" | grep -q "Déjà à jour"; then ok "déjà à jour : message explicite"; else ko "déjà à jour : message explicite" "code $CODE — $OUT"; fi
+
+# --- 5bis. Clone superficiel, plusieurs commits d'avance -----------------
+echo
+echo "--- 5bis. Clone superficiel : plusieurs commits d'avance ---"
+bump_fixture_to "1.4.3"
+bump_fixture_to "1.4.4"
+bump_fixture_to "1.4.5"
+OUT="$(run_updater)"; CODE=$?
+if [ "$CODE" -eq 0 ]; then ok "superficiel : avance de plusieurs commits acceptée"; else ko "superficiel : avance de plusieurs commits acceptée" "code $CODE — $OUT"; fi
+if [ "$(installed_version)" = "1.4.5" ]; then ok "superficiel : version finale atteinte"; else ko "superficiel : version finale atteinte" "obtenu « $(installed_version) »"; fi
+if [ -f "$INSTALL/.git/shallow" ]; then ok "superficiel : clone toujours superficiel après mise à jour"; else ko "superficiel : clone toujours superficiel" "profondeur modifiée sans raison"; fi
 
 # --- 6. Modifications locales refusées -----------------------------------
 echo
@@ -234,6 +260,19 @@ else
   ok "aucun chemin ni courriel personnel dans le kit"
 fi
 if grep -q "ff-only" "$UPDATER"; then ok "mise à jour en avance rapide uniquement (--ff-only)"; else ko "mise à jour en avance rapide uniquement (--ff-only)" "absent"; fi
+
+# --- 12. Dépôt publié sans le kit ---------------------------------------
+echo
+echo "--- 12. Dépôt publié sans le kit (avant publication) ---"
+make_fixture_nokit
+INSTALL_SANS="$HOME_SB/Applications/Sans kit"
+LINK_SANS="$DESKTOP_SB/Mettre à jour Cartes vers Anki.command"
+rm -f "$LINK_SANS"
+OUT="$(run_installer "$INSTALL_SANS")"; CODE=$?
+if [ "$CODE" -eq 0 ]; then ok "dépôt sans kit : installation aboutie"; else ko "dépôt sans kit : installation aboutie" "code $CODE — $OUT"; fi
+if [ -f "$INSTALL_SANS/extension/manifest.json" ]; then ok "dépôt sans kit : extension bien installée"; else ko "dépôt sans kit : extension bien installée" "extension absente"; fi
+if [ -e "$LINK_SANS" ]; then ko "dépôt sans kit : aucun raccourci cassé" "raccourci créé vers un script absent"; else ok "dépôt sans kit : aucun raccourci cassé"; fi
+if printf '%s' "$OUT" | grep -q "ne contient pas encore le script"; then ok "dépôt sans kit : explication claire"; else ko "dépôt sans kit : explication claire" "$OUT"; fi
 
 echo
 echo "bac à sable supprimé : $SB"

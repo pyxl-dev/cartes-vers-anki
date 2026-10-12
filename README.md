@@ -31,13 +31,13 @@ remise à zéro, jamais d'écrasement, jamais de changement de branche.
 
 Détails, dépannage et avertissement macOS : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
-> **Fichiers téléchargés en ZIP.** Une archive *Code → Download ZIP* ne conserve
-> pas le droit d'exécution : le double-clic ouvre alors le fichier dans un
-> éditeur de texte au lieu de le lancer. Le geste à faire, une seule fois :
-> **clic droit sur le fichier → *Ouvrir avec* → Terminal**. La suite s'enchaîne
-> normalement, et le raccourci du Bureau fonctionne ensuite par double-clic.
-> Un `git clone` conserve ce droit : dans ce cas le double-clic suffit
-> directement.
+> **Fichiers téléchargés en ZIP.** Vérifié sur l'archive réelle de cette
+> branche : le droit d'exécution est bien transporté, donc le double-clic
+> fonctionne après extraction. Si ton outil de décompression ne le conserve pas
+> (certains clients Windows, ou une ré-archive manuelle), le double-clic ouvre
+> le fichier dans un éditeur : fais alors **clic droit sur le fichier →
+> *Ouvrir avec* → Terminal**, une seule fois. Un `git clone` conserve ce droit
+> dans tous les cas.
 >
 > **Premier lancement.** macOS peut afficher un avertissement de développeur non
 > identifié : clic droit sur le fichier → **Ouvrir** → **Ouvrir**. Aucun mot de

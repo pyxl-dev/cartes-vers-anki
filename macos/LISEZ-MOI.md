@@ -42,14 +42,14 @@ aucune protection de macOS.
 
 ## Limites connues de cette version bêta
 
-- **Archive ZIP et droit d'exécution.** Le dépôt conserve le droit d'exécution
-  (mode `100755`), et un `git clone` le respecte. Une archive *Download ZIP*
-  téléchargée depuis GitHub peut en revanche ne pas le transporter : dans ce cas
-  le double-clic n'exécute pas le fichier. Le contournement par *Ouvrir avec →
-  Terminal* est le geste prévu, mais son comportement exact n'est pas garanti
-  sur toutes les versions de macOS. **Le chemin recommandé reste donc
-  l'installateur lui-même, qui clone le dépôt** — il rétablit aussi le droit
-  d'exécution sur sa propre copie.
+- **Archive ZIP et droit d'exécution.** Vérifié sur l'archive réelle de cette
+  branche : GitHub transporte bien le droit d'exécution (mode `100755`), et le
+  double-clic fonctionne après extraction par l'utilitaire d'archive de macOS.
+  Ce n'est pas garanti avec tous les outils de décompression (certains clients
+  Windows, ou une ré-archive manuelle) : dans ce cas le double-clic ouvre le
+  fichier dans un éditeur de texte, et le geste prévu est *clic droit → Ouvrir
+  avec → Terminal*. L'installateur rétablit de toute façon le droit d'exécution
+  sur la copie qu'il installe.
 - **Avertissement de sécurité macOS.** Le premier lancement peut demander une
   confirmation (clic droit → *Ouvrir*). Le kit n'est pas signé : c'est normal
   pour un script distribué hors App Store.
