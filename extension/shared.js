@@ -118,33 +118,41 @@
     }
     return -1;
   }
-  // Ligne → nœuds : {t:'text'|'code', v} | {t:'b'|'i'|'sup'|'sub', c:[…]} | {t:'cloze', prefix, c, hint}
-  function inline(s) {
+  /* Ligne → nœuds : {t:'text'|'code', v, o} | {t:'b'|'i'|'sup'|'sub', c:[…]} |
+     {t:'cloze', n, prefix, c, hint, start, end, cStart, cEnd}.
+     `base` est la position de `s` dans le texte d'origine : chaque texte (o) et
+     chaque trou (start…end, contenu cStart…cEnd) garde sa place dans la source,
+     ce qui permet à la fenêtre de vérification de modifier un trou ou d'en créer
+     un à partir d'une sélection sans réécrire le reste. */
+  function inline(s, base = 0) {
     const out = [];
-    let buf = '';
-    const flush = () => { if (buf) { out.push({t: 'text', v: buf}); buf = ''; } };
+    let buf = '', bufAt = 0;
+    const flush = () => { if (buf) { out.push({t: 'text', v: buf, o: base + bufAt}); buf = ''; } };
     for (let i = 0; i < s.length;) {
       const cz = clozeAt(s, i);
       if (cz) {
         flush();
-        out.push({t: 'cloze', prefix: cz.prefix, c: inline(cz.content), hint: cz.hint});
+        const cStart = base + i + cz.prefix.length;
+        out.push({t: 'cloze', n: Number(cz.n), prefix: cz.prefix, c: inline(cz.content, cStart), hint: cz.hint,
+          start: base + i, end: base + cz.end, cStart, cEnd: cStart + cz.content.length});
         i = cz.end; continue;
       }
       const ch = s[i];
       if (ch === '`') {
         const j = codeEnd(s, i);
-        if (j >= 0) { flush(); out.push({t: 'code', v: s.slice(i + 1, j)}); i = j + 1; continue; }
+        if (j >= 0) { flush(); out.push({t: 'code', v: s.slice(i + 1, j), o: base + i + 1}); i = j + 1; continue; }
       } else if (ch === '*' && s[i + 1] === '*' && !isSpace(s[i + 2])) {
         const j = findClose(s, i + 2, '**');
-        if (j >= 0) { flush(); out.push({t: 'b', c: inline(s.slice(i + 2, j))}); i = j + 2; continue; }
+        if (j >= 0) { flush(); out.push({t: 'b', c: inline(s.slice(i + 2, j), base + i + 2)}); i = j + 2; continue; }
       } else if (ch === '*' && s[i + 1] !== '*' && s[i - 1] !== '*' && !isSpace(s[i + 1])) {
         const j = findClose(s, i + 1, '*');
-        if (j >= 0) { flush(); out.push({t: 'i', c: inline(s.slice(i + 1, j))}); i = j + 1; continue; }
+        if (j >= 0) { flush(); out.push({t: 'i', c: inline(s.slice(i + 1, j), base + i + 1)}); i = j + 1; continue; }
       } else if ((ch === '^' || ch === '~') && s[i + 1] !== ch && s[i - 1] !== ch && !isSpace(s[i + 1])) {
         // Exposant / indice : sans espace, comme Na^+^, Ca^2+^ ou H~2~O.
         const j = findClose(s, i + 1, ch, {noSpace: true});
-        if (j >= 0) { flush(); out.push({t: ch === '^' ? 'sup' : 'sub', c: inline(s.slice(i + 1, j))}); i = j + 1; continue; }
+        if (j >= 0) { flush(); out.push({t: ch === '^' ? 'sup' : 'sub', c: inline(s.slice(i + 1, j), base + i + 1)}); i = j + 1; continue; }
       }
+      if (!buf) bufAt = i;
       buf += ch; i++;
     }
     flush();
@@ -154,14 +162,14 @@
      ne coupe pas la ligne (sinon une liste pourrait couper le marqueur). */
   function logicalLines(s) {
     const lines = [];
-    let cur = '';
+    let cur = '', at = 0;
     for (let i = 0; i < s.length;) {
       const cz = clozeAt(s, i);
       if (cz) { cur += s.slice(i, cz.end); i = cz.end; continue; }
-      if (s[i] === '\n') { lines.push(cur); cur = ''; i++; continue; }
+      if (s[i] === '\n') { lines.push({text: cur, o: at}); cur = ''; i++; at = i; continue; }
       cur += s[i]; i++;
     }
-    lines.push(cur);
+    lines.push({text: cur, o: at});
     return lines;
   }
   const UL = /^ {0,3}- +(\S.*)$/s;
@@ -169,7 +177,7 @@
   // Texte → blocs : {t:'lines', lines:[nœuds…]} | {t:'ul'|'ol', start, items:[nœuds…]}
   function parse(text) {
     const blocks = [];
-    for (const line of logicalLines(String(text ?? ''))) {
+    for (const {text: line, o} of logicalLines(String(text ?? ''))) {
       const ul = line.match(UL), ol = ul ? null : line.match(OL);
       const kind = ul ? 'ul' : ol ? 'ol' : 'lines';
       let last = blocks[blocks.length - 1];
@@ -177,8 +185,11 @@
         last = kind === 'lines' ? {t: 'lines', lines: []} : {t: kind, start: ol ? Number(ol[1]) : 1, items: []};
         blocks.push(last);
       }
-      if (kind === 'lines') last.lines.push(inline(line));
-      else last.items.push(inline(ul ? ul[1] : ol[2]));
+      if (kind === 'lines') last.lines.push(inline(line, o));
+      else {
+        const item = ul ? ul[1] : ol[2];
+        last.items.push(inline(item, o + line.length - item.length));
+      }
     }
     // Les lignes vides collées à une liste ne font qu'ajouter un saut de ligne parasite.
     blocks.forEach((b, k) => {
@@ -187,6 +198,85 @@
       if (blocks[k + 1] && blocks[k + 1].t !== 'lines') while (b.lines.length && !b.lines[b.lines.length - 1].length) b.lines.pop();
     });
     return blocks.filter(b => b.t !== 'lines' || b.lines.length);
+  }
+
+  /* --- Trous : édition sans syntaxe ----------------------------------------
+     La fenêtre de vérification montre chaque trou comme une case à remplir. Ces
+     fonctions modifient le texte source à la bonne place et refusent tout
+     résultat qui casserait un trou ou une mise en forme. */
+  // Trous de premier niveau (ceux d'un trou imbriqué restent dans son contenu).
+  function clozesOf(text) {
+    const src = String(text ?? '');
+    const found = [];
+    const walk = nodes => nodes.forEach(n => {
+      if (n.t === 'cloze') found.push({n: n.n, start: n.start, end: n.end, cStart: n.cStart, cEnd: n.cEnd,
+        content: src.slice(n.cStart, n.cEnd), hint: n.hint});
+      else if (n.c) walk(n.c);
+    });
+    parse(src).forEach(b => (b.t === 'lines' ? b.lines : b.items).forEach(walk));
+    return found;
+  }
+  // « **réponse** » s'affiche « réponse » en gras dans la case : la mise en forme
+  // qui entoure TOUT le contenu est conservée à part, sans marqueurs visibles.
+  function splitAnswer(content) {
+    const c = String(content ?? '');
+    for (const wrap of ['**', '*']) {
+      if (c.length > 2 * wrap.length && c.startsWith(wrap) && c.endsWith(wrap)) {
+        const inner = c.slice(wrap.length, -wrap.length);
+        const nodes = inline(c);
+        if (nodes.length === 1 && nodes[0].t === (wrap === '**' ? 'b' : 'i')) return {value: inner, wrap};
+      }
+    }
+    return {value: c, wrap: ''};
+  }
+  function answerError(value) {
+    const v = String(value ?? '');
+    if (!v.trim()) return 'La réponse du trou est vide.';
+    if (/\{\{|\}\}|::|\n/.test(v)) return 'La réponse ne peut contenir ni « {{ », ni « }} », ni « :: », ni retour à la ligne.';
+    return '';
+  }
+  const clozeMarkersOut = x => x.replace(/\{\{c\d+::|\}\}/g, '');
+  function setClozeAnswer(text, k, value, wrap = '') {
+    const src = String(text ?? '');
+    const cz = clozesOf(src)[k];
+    if (!cz) return {ok: false, error: 'Trou introuvable : la carte a changé.'};
+    const error = answerError(value);
+    if (error) return {ok: false, error};
+    const next = src.slice(0, cz.cStart) + wrap + value + wrap + src.slice(cz.cEnd);
+    if (clozesOf(next).length !== clozesOf(src).length) return {ok: false, error: 'Cette réponse casserait le trou.'};
+    return {ok: true, text: next};
+  }
+  function removeCloze(text, k) {
+    const src = String(text ?? '');
+    const cz = clozesOf(src)[k];
+    if (!cz) return {ok: false, error: 'Trou introuvable : la carte a changé.'};
+    return {ok: true, text: src.slice(0, cz.start) + cz.content + src.slice(cz.end)};
+  }
+  // Nouveau trou sur [start, end[ du texte source : numéro suivant (= nouvelle carte).
+  function addCloze(text, start, end) {
+    const src = String(text ?? '');
+    let a = Math.max(0, Math.min(start, end)), b = Math.min(src.length, Math.max(start, end));
+    while (a < b && /\s/.test(src[a])) a++;
+    while (b > a && /\s/.test(src[b - 1])) b--;
+    if (a >= b) return {ok: false, error: 'Sélectionne d’abord un mot ou une expression dans le texte.'};
+    const slice = src.slice(a, b);
+    if (/\n/.test(slice)) return {ok: false, error: 'Un trou doit tenir sur une seule ligne.'};
+    const existing = clozesOf(src);
+    if (existing.some(c => a < c.end && b > c.start)) return {ok: false, error: 'La sélection touche un trou existant.'};
+    const n = existing.reduce((m, c) => Math.max(m, c.n), 0) + 1;
+    const prefix = `{{c${n}::`;
+    const next = src.slice(0, a) + prefix + slice + '}}' + src.slice(b);
+    const made = clozesOf(next).find(c => c.start === a);
+    // Le texte visible doit rester identique : sinon la sélection coupait une mise en forme.
+    if (!made || made.end !== a + prefix.length + slice.length + 2 ||
+        clozeMarkersOut(stripMarkdown(next)) !== clozeMarkersOut(stripMarkdown(src))) {
+      return {ok: false, error: 'La sélection coupe une mise en forme (gras, exposant…) : sélectionne un passage simple, ou utilise « Modifier le texte ».'};
+    }
+    return {ok: true, text: next, n};
+  }
+  // Titre lisible : marqueurs retirés, trous montrés « [réponse] ».
+  function readableTitle(text) {
+    return stripMarkdown(text).replace(/\{\{c\d+::([\s\S]*?)(?:::[\s\S]*?)?\}\}/g, '[$1]').replace(/\s+/g, ' ').trim();
   }
 
   /* --- Mise en forme : rendus -------------------------------------------- */
@@ -279,9 +369,107 @@
     return target;
   }
 
+  /* Éditeur visuel d'un texte à trous, en DOM sûr. Le texte est affiché mis en
+     forme ; chaque morceau porte data-o (sa position dans la source) pour qu'une
+     sélection puisse devenir un trou. Chaque trou de premier niveau devient :
+     numéro de carte + case contenant la réponse attendue + bouton « retirer ».
+     Les actions sont confiées à l'appelant (hooks.onAnswer / hooks.onRemove). */
+  function editorNodes(doc, parent, nodes, hooks, counter) {
+    for (const n of nodes) {
+      if (n.t === 'text' || n.t === 'code') {
+        const host = n.t === 'code' ? doc.createElement('code') : parent;
+        let at = n.o;
+        n.v.split('\n').forEach((part, k) => {
+          if (k) { host.append(doc.createElement('br')); at++; }
+          if (!part) return;
+          const span = doc.createElement('span');
+          span.className = 'ankibridge-src';
+          span.setAttribute('data-o', String(at));
+          span.textContent = part;
+          host.append(span);
+          at += part.length;
+        });
+        if (host !== parent) parent.append(host);
+      } else if (n.t === 'cloze') {
+        const k = counter.k++;
+        const hole = doc.createElement('span');
+        hole.className = 'ankibridge-hole';
+        const num = doc.createElement('span');
+        num.className = 'ankibridge-holenum';
+        num.textContent = String(n.n);
+        num.setAttribute('title', `Carte ${n.n} : ce trou est caché dans la carte n° ${n.n}`);
+        const input = doc.createElement('input');
+        input.type = 'text';
+        input.className = 'ankibridge-holeinput';
+        const {value, wrap} = splitAnswer(hooks.source.slice(n.cStart, n.cEnd));
+        input.value = value;
+        if (wrap === '**') input.classList.add('bold');
+        if (wrap === '*') input.classList.add('italic');
+        input.setAttribute('size', String(Math.min(60, Math.max(4, value.length + 1))));
+        input.setAttribute('aria-label', `Réponse attendue du trou ${k + 1} (carte ${n.n})`);
+        input.setAttribute('autocomplete', 'off');
+        input.setAttribute('spellcheck', 'false');
+        if (/\{\{/.test(value)) {
+          input.disabled = true;
+          input.setAttribute('title', 'Trou imbriqué : utilise « Modifier le texte ».');
+        }
+        input.addEventListener('input', () => {
+          input.setAttribute('size', String(Math.min(60, Math.max(4, input.value.length + 1))));
+          hooks.onAnswer(k, input.value, wrap, input);
+        });
+        hole.append(num, input);
+        if (n.hint !== null) {
+          const hint = doc.createElement('span');
+          hint.className = 'ankibridge-clozehint';
+          hint.textContent = ` indice : ${n.hint}`;
+          hole.append(hint);
+        }
+        const remove = doc.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ankibridge-holeremove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', `Retirer le trou ${k + 1} (le texte reste)`);
+        remove.setAttribute('title', 'Retirer ce trou (le texte reste visible)');
+        remove.addEventListener('mousedown', e => e.preventDefault());
+        remove.onclick = () => hooks.onRemove(k);
+        hole.append(remove);
+        parent.append(hole);
+      } else {
+        const el = doc.createElement(TAG[n.t]);
+        editorNodes(doc, el, n.c, hooks, counter);
+        parent.append(el);
+      }
+    }
+  }
+  function renderClozeEditor(target, text, doc, hooks) {
+    const source = String(text ?? '');
+    const all = {...hooks, source};
+    const counter = {k: 0};
+    target.replaceChildren();
+    parse(source).forEach(b => {
+      if (b.t === 'lines') {
+        b.lines.forEach((line, k) => {
+          if (k) target.append(doc.createElement('br'));
+          editorNodes(doc, target, line, all, counter);
+        });
+        return;
+      }
+      const list = doc.createElement(b.t);
+      if (b.t === 'ol' && b.start !== 1) list.setAttribute('start', String(b.start));
+      for (const item of b.items) {
+        const li = doc.createElement('li');
+        editorNodes(doc, li, item, all, counter);
+        list.append(li);
+      }
+      target.append(list);
+    });
+    return counter.k;
+  }
+
   root.AnkiShared = Object.freeze({
     normText, deckLabel, validateDeckName, sameDeck, normalizeTag, MAX_DECK_NAME,
     escapeHtml, htmlToText,
-    toAnkiHtml, stripMarkdown, hasFormatting, renderInto, parseFormatting: parse
+    toAnkiHtml, stripMarkdown, hasFormatting, renderInto, renderClozeEditor, parseFormatting: parse,
+    clozesOf, splitAnswer, answerError, setClozeAnswer, removeCloze, addCloze, readableTitle
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

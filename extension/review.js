@@ -5,7 +5,8 @@
    Ouverte par content.js (bouton sous la réponse de ChatGPT). Tout le contenu
    venant de ChatGPT ou d'Anki est inséré avec textContent, jamais comme du HTML. */
 (() => {
-  const {deckLabel, normalizeTag, renderInto, sameDeck, stripMarkdown, validateDeckName} = AnkiShared;
+  const {deckLabel, normalizeTag, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
+  const {holeEditor} = AnkiHoles;
   const {createDeckPicker, askConfirm, el} = AnkiPicker;
   const TAG_KEY = 'batchTag';   // dernier tag du lot, proposé à l'ouverture suivante
   const api = (type, extra={}) => new Promise((resolve, reject) => {
@@ -26,7 +27,7 @@
     const dialog = el('section','ankibridge-dialog'); dialog.setAttribute('role','dialog'); dialog.setAttribute('aria-modal','true');
     const head = el('div','ankibridge-head');
     const lotLabel = info.lots > 1 ? ` (lot ${info.lot.from}–${info.lot.to})` : '';
-    head.append(el('h2','',`Vérifier ${cards.length} cartes avant import${lotLabel}`));
+    head.append(el('h2','',`Vérifier ${cards.length} carte${cards.length>1?'s':''} avant import${lotLabel}`));
     const close = el('button','ankibridge-close','×'); close.type='button'; close.setAttribute('aria-label','Fermer'); close.onclick=()=>closeModal();
     head.append(close); dialog.append(head);
     const main = el('div','ankibridge-main');
@@ -105,11 +106,11 @@
       const summary=el('summary');
       const typeLabel=card.type==='cloze'?'[Texte à trous] ':'[Basique] ';
       // Titre sans marqueurs de mise en forme : l'aperçu les montre dans le détail.
-      const title=el('span','ankibridge-title',`${i+1}. ${typeLabel}${stripMarkdown(card.front||card.text).replace(/\s+/g,' ').trim().slice(0,140)}`);
+      const title=el('span','ankibridge-title',`${i+1}. ${typeLabel}${readableTitle(card.front||card.text).slice(0,140)}`);
       summary.append(title); details.append(summary);
       const notice=el('div','ankibridge-notice','Comparaison avec Anki en cours…');
       details.append(notice);
-      const firstLabel=el('label','',card.type==='cloze'?'Texte à trous ({{c1::...}})':'Question');
+      const firstLabel=el('label','',card.type==='cloze'?'Texte brut (un trou s’écrit {{c1::réponse}})':'Question');
       const first=el('textarea'); first.value=card.type==='cloze'?card.text:card.front; firstLabel.append(first);
       const secondLabel=el('label','',card.type==='cloze'?'Précisions facultatives':'Réponse');
       const second=el('textarea'); second.value=card.type==='cloze'?card.extra:card.back; secondLabel.append(second);
@@ -125,7 +126,10 @@
         field.append(label,preview);
         return field;
       };
-      details.append(withPreview(firstLabel,first),withPreview(secondLabel,second));
+      const firstField=withPreview(firstLabel,first);
+      // Texte à trous : édition visuelle par défaut, texte brut sur demande.
+      if(card.type==='cloze')details.append(holeEditor(first,firstField));
+      details.append(firstField,withPreview(secondLabel,second));
       // Bloc « remplacer » : vide tant qu'aucune note certaine n'est identifiée.
       const replaceRow=el('div','ankibridge-replacerow'); details.append(replaceRow);
       row.append(check, dot, status, details);

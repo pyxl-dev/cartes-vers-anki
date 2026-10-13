@@ -74,6 +74,33 @@
 .ankibridge-card label{display:block;margin-top:8px;font-size:12px;color:#374151;font-weight:600}
 .ankibridge-card textarea{width:100%;box-sizing:border-box;min-height:52px;margin-top:3px;padding:6px 8px;
   border:1px solid #cbd5e1;border-radius:8px;font:13px/1.4 system-ui;resize:vertical}
+/* Un élément masqué l'est toujours, même si une règle lui donne un display. */
+.ankibridge-dialog [hidden]{display:none!important}
+/* Texte à trous visuel : le texte mis en forme, chaque trou est une case à remplir. */
+.ankibridge-holes{margin-top:8px}
+.ankibridge-holeshead{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ankibridge-holescap{font-size:12px;font-weight:600;color:#374151}
+.ankibridge-holestoggle,.ankibridge-holeadd{background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:5px 10px;
+  font:600 12px system-ui;color:#1f2937;cursor:pointer}
+.ankibridge-holeeditor{margin-top:6px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;
+  font:14px/2 system-ui;color:#111827;word-break:break-word;user-select:text}
+.ankibridge-holeeditor ul,.ankibridge-holeeditor ol{margin:2px 0;padding-left:22px}
+.ankibridge-holeeditor code{background:#f1f5f9;border-radius:4px;padding:0 3px;font:12px ui-monospace,Menlo,monospace}
+.ankibridge-hole{display:inline-flex;align-items:center;gap:3px;margin:0 2px;padding:1px 3px 1px 2px;border-radius:7px;
+  background:#dbeafe;border:1px solid #93c5fd;vertical-align:baseline;line-height:1.4}
+.ankibridge-holenum{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;
+  background:#1d4ed8;color:#fff;font:700 11px system-ui;padding:0 4px}
+.ankibridge-holeinput{box-sizing:content-box;border:1px solid #93c5fd;border-radius:5px;background:#fff;color:#1e3a8a;
+  font:600 14px system-ui;padding:1px 6px;min-width:3ch;max-width:100%}
+.ankibridge-holeinput.bold{font-weight:800}
+.ankibridge-holeinput.italic{font-style:italic}
+.ankibridge-holeinput.invalid{border-color:#b91c1c;background:#fef2f2}
+.ankibridge-holeinput:focus-visible{outline:2px solid #1d4ed8;outline-offset:1px}
+.ankibridge-holeremove{border:0;background:none;color:#1e3a8a;font:700 15px/1 system-ui;cursor:pointer;padding:0 3px}
+.ankibridge-holeremove:hover{color:#b91c1c}
+.ankibridge-holeactions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px}
+.ankibridge-holemsg{font-size:12px;color:#14532d}
+.ankibridge-holemsg.bad{color:#9a3412}
 /* Texte modifiable et aperçu mis en forme côte à côte (l'un sous l'autre si étroit). */
 .ankibridge-field{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start}
 .ankibridge-preview{margin-top:8px;padding:6px 10px;border:1px dashed #cbd5e1;border-radius:8px;background:#fff;

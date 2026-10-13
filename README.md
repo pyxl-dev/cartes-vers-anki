@@ -92,6 +92,8 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
    La lecture est **tolérante** : une carte mal formée est écartée seule (avec sa raison, listée dans la fenêtre de vérification) au lieu de bloquer tout le lot ; une réponse **coupée** par ChatGPT donne les cartes complètes, la dernière carte incomplète étant ignorée ; plusieurs blocs de code dans la même réponse sont **additionnés**.
 4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet. À côté de chaque texte modifiable, un **aperçu mis en forme** montre la carte telle qu'elle apparaîtra dans Anki (gras, listes, exposants…), mis à jour à chaque frappe.
+
+   **Textes à trous sans syntaxe.** Un texte à trous s'affiche mis en forme, et chaque trou est une **case** contenant la réponse attendue (avec le numéro de la carte qu'il produira) : on corrige la réponse directement dans la case, on retire un trou avec **×** (le texte reste), et on **crée un trou** en sélectionnant un mot ou une expression puis en cliquant **« Transformer la sélection en trou »** (nouveau numéro = nouvelle carte). Une modification qui casserait la carte (réponse vide, sélection à cheval sur une mise en forme ou sur un autre trou) est refusée avec une explication. Le texte brut `{{c1::…}}` reste accessible par **« Modifier le texte »**.
 5. La **comparaison se lance automatiquement** à l'ouverture (sur le dernier paquet utilisé) : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
 6. Changer de paquet dans la liste **relance la comparaison automatiquement** ; les conclusions du paquet précédent sont abandonnées et les cartes remises à l'état initial. Le bouton **« Relancer la comparaison »** reste disponible en secours.
 7. Facultatif : remplir **« Tag du lot »** (par exemple `Cardio::Cours_3`). Ce tag est ajouté à **toutes** les cartes importées, en plus de leurs propres tags (il ne compte pas dans la limite de 8), et il est **mémorisé** pour la prochaine fois. Les espaces deviennent `_`, comme pour les autres tags.
@@ -223,6 +225,7 @@ Autres points :
 
 - **100 cartes maximum par import** : au-delà, l'extension propose un bouton par lot de 100.
 - L'extension ne crée pas de type de note. Elle ne crée un paquet que depuis la fenêtre de vérification, après confirmation explicite.
+- Éditeur de trous : un trou imbriqué dans un autre, ou l'indice d'un trou (`::indice`), se modifie par « Modifier le texte ». La création d'un trou se fait à la souris (sélection), pas au clavier seul.
 - Mise en forme volontairement limitée : pas de liste imbriquée (une ligne indentée reste un élément du même niveau), pas de titre, de tableau, de lien ni d'image. Comme en Markdown, `a*b*c` met `b` en italique : écrire `a × b × c` ou utiliser `` `code` `` pour un astérisque littéral.
 - Une carte importée **avant la 1.6.0** avec des marqueurs visibles (`**mot**` écrit en clair) n'est pas un doublon exact de la même carte désormais mise en forme : elle est signalée « Formulation similaire » et décochée par précaution.
 - Un changement **uniquement** de mise en forme n'est pas proposé comme remplacement d'une note existante (le texte est identique).
@@ -233,11 +236,11 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 212 tests
+node tests/test.cjs          # extension : 222 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-212 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
+222 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
 
 - lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;
@@ -247,6 +250,7 @@ bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetabl
 - mise en forme : compatibilité exacte avec la 1.5 pour un texte simple, gras / italique / code / exposant / indice / listes, aucun lien ni HTML, marqueurs `{{c1::…}}` intacts (y compris sur 2000 textes aléatoires), doublon reconnu après mise en forme, similarité insensible à la mise en forme, aperçu construit en DOM sûr ;
 - création de paquet (`CREATE_DECK`) : sous-paquets, paquet existant jamais recréé, noms invalides refusés sans écriture, origine contrôlée ; dans la fenêtre : option en dernière position, confirmation, annulation sans écriture, rechargement, sélection et comparaison relancée ;
 - tag du lot : normalisé, ajouté en plus des 8 tags, mémorisé, affiché dans le récapitulatif ;
+- texte à trous visuel : positions exactes dans la source (2000 textes aléatoires), réponse modifiée à sa place avec mise en forme et indice conservés, réponses invalides refusées, trou retiré sans perdre le texte, sélection transformée en trou (refus à cheval sur une mise en forme, un trou ou du code), bascule texte brut ;
 - `content.js` avec un DOM simulé : bouton « Ajouter N cartes à Anki » créé dans le bon conteneur, jamais sur le message de l'utilisateur, pas de doublon de bouton après re-balayage, ancien DOM pris en charge, ouverture de la fenêtre, message neutre quand toutes les cartes existent déjà, import envoyé pour des cartes neuves ;
 - cohérence du manifeste (version, permissions minimales, aucune URL distante, aucun motif de secret), ordre de chargement (`shared.js` en premier partout), aucune insertion de HTML brut, aucune action Anki destructive.
 
@@ -262,6 +266,7 @@ extension/      extension chargeable (manifest.json à la racine de ce dossier)
   cards.js      analyse et validation du JSON des cartes
   content.js    détection du bloc JSON sur la page ChatGPT + boutons d'import
   picker.js     sélecteur de paquet (avec création) et confirmation dans la page
+  holes.js      éditeur visuel des textes à trous (cases, sélection → trou)
   review.js     fenêtre de vérification : aperçu, tag du lot, comparaison, import
   background.js appels AnkiConnect (service worker MV3), résolution du port
   search.js     lecture des notes existantes (contexte et recherche)
