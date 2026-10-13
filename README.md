@@ -2,6 +2,11 @@
 
 Extension navigateur (Manifest V3) qui transforme les cartes générées par ChatGPT.com en notes dans **Anki Desktop**, sans copier-coller de JSON, avec contrôle des doublons avant import.
 
+> ### 🧩 Installation la plus simple : [Cartes vers Anki sur le Chrome Web Store](https://chromewebstore.google.com/detail/fhkabgkbnknihhdlmcnkmnbijepclipi)
+>
+> Fonctionne dans Chrome, Brave et Edge. Les mises à jour s'installent ensuite toutes seules.
+> Les sections « kit bêta » et « installation manuelle » ci-dessous ne servent qu'à tester une version non publiée.
+
 **Entièrement local :** l'extension ne parle qu'à `AnkiConnect` sur la boucle locale (`127.0.0.1`). Aucun serveur distant, aucune clé d'API, aucun compte, aucune télémétrie, aucun quota imposé par l'extension.
 
 > ### 🍎 Sur Mac, commence par ouvrir [00 - INSTALLER SUR MAC.html](00%20-%20INSTALLER%20SUR%20MAC.html)
@@ -83,7 +88,9 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
 1. **Anki ouvert**, puis ouvrir ChatGPT.com.
 2. Joindre ou coller le cours, et demander les cartes sous forme d'**un seul bloc de code JSON** (voir le schéma ci-dessous).
-3. Un bouton **« Ajouter N cartes à Anki »** apparaît automatiquement sous la réponse.
+3. Un bouton **« Ajouter N cartes à Anki »** apparaît automatiquement sous la réponse. Au-delà de 100 cartes, un bouton par **lot de 100** (« Lot 2 : ajouter les cartes 101 à 200 »).
+
+   La lecture est **tolérante** : une carte mal formée est écartée seule (avec sa raison, listée dans la fenêtre de vérification) au lieu de bloquer tout le lot ; une réponse **coupée** par ChatGPT donne les cartes complètes, la dernière carte incomplète étant ignorée ; plusieurs blocs de code dans la même réponse sont **additionnés**.
 4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet.
 5. La **comparaison se lance automatiquement** à l'ouverture (sur le dernier paquet utilisé) : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
 6. Changer de paquet dans la liste **relance la comparaison automatiquement** ; les conclusions du paquet précédent sont abandonnées et les cartes remises à l'état initial. Le bouton **« Relancer la comparaison »** reste disponible en secours.
@@ -146,7 +153,8 @@ Règles appliquées carte par carte :
 
 Autres contraintes :
 
-- **1 à 100 cartes par lot.** Au-delà, l'extension demande de découper la demande en lots.
+- **100 cartes par vérification / import.** Au-delà, la réponse est découpée automatiquement en lots de 100, chacun avec son bouton.
+- **Tags** : les espaces deviennent `_`, la hiérarchie Anki `Parent::Enfant` est conservée, ainsi que les lettres accentuées et ligatures (`cœur`).
 - Le **paquet de destination doit exister** dans Anki (l'extension ne crée pas de paquet).
 - Le type de note doit être **Basique / Basic** ou **Texte à trous / Cloze**. L'extension écrit dans les **deux premiers champs** du type de note : tester avec un type très personnalisé avant un usage réel.
 - Une carte invalide est refusée avec son numéro, sans bloquer les autres.
@@ -194,7 +202,7 @@ Autres points :
 
 ## Limites connues
 
-- **100 cartes maximum par import** (découper en lots au-delà).
+- **100 cartes maximum par import** : au-delà, l'extension propose un bouton par lot de 100.
 - Le paquet de destination doit déjà exister ; l'extension ne crée ni paquet ni type de note.
 - La détection automatique du bouton dépend de la structure HTML de ChatGPT.com. Elle est vérifiée sur le DOM courant (`[data-dil-source-message-id]` pour le message de l'assistant, `[data-user-message-bubble]` pour le message de l'utilisateur), avec l'ancien sélecteur `[data-message-author-role]` conservé en secours. Si le site change encore, le **mode de secours par collage** reste opérationnel.
 - L'import se fait dans un navigateur de bureau (Brave/Chrome/Edge) ; AnkiConnect n'est pas joignable depuis un navigateur mobile.
@@ -203,12 +211,13 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 115 tests
+node tests/test.cjs          # extension : 165 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-115 tests hors navigateur, sans réseau externe :
+165 tests hors navigateur, sans réseau externe :
 
+- lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;
 - port AnkiConnect : validation `1..65535`, identification d'un vrai AnkiConnect, refus d'un JSON étranger / d'une page HTML / d'un objet sans version, ordre de sondage 8765 → 8766, priorité du choix manuel, aucune écriture envoyée pendant la sonde ;
 - import réel contre un **faux AnkiConnect** en boucle locale : ajout de 100 cartes, réimport → 0 ajoutée + 100 doublons, doublon interne au lot, cloze, refus au-delà de 100, paquet inconnu, contrôle d'origine des messages ;
@@ -229,6 +238,8 @@ extension/      extension chargeable (manifest.json à la racine de ce dossier)
   search.js     lecture des notes existantes (contexte et recherche)
   similarity.js comparaison lexicale locale (formulations proches)
   popup.html/popup.js  interface : port, préparation du prompt, mode de secours
+docs/PUBLICATION.md  publication automatique sur le Chrome Web Store (tag vX.Y.Z)
+.github/workflows/   tests sur chaque PR, publication sur tag
 macos/          kit bêta : installer et mettre à jour par double-clic
   Installer Cartes vers Anki.command
   Mettre à jour Cartes vers Anki.command

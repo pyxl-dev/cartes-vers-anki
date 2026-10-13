@@ -143,8 +143,14 @@ function plainToHtml(text) {
   return String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll('\n','<br>');
 }
+/* Tags Anki : pas d'espace. On garde lettres (y compris œ, æ, grec…), chiffres,
+   « _ », « - » et la hiérarchie « Parent::Enfant » utilisée par beaucoup de
+   paquets partagés. Un « : » isolé ou en bord de tag est retiré. */
 function normalizeTag(s) {
-  return String(s).trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-À-ÿ]/g, '').slice(0, 40);
+  return String(s).trim().replace(/\s+/g, '_')
+    .replace(/[^\p{L}\p{N}_\-:]/gu, '')
+    .replace(/:{3,}/g, '::').replace(/(^|[^:]):(?!:)/g, '$1').replace(/^:+|:+$/g, '')
+    .slice(0, 100);
 }
 /* Anki range du HTML dans les champs. Pour comparer deux contenus (clé de doublon,
    détection de dérive depuis l'analyse) on retire les balises et on normalise les
@@ -207,6 +213,8 @@ async function importCards(deckName, cards) {
   for (const type of types) modelMap[type] = await findModel(type, models);
   const seen = new Set();
   const result = {added: 0, skipped: 0, errors: [], total: cards.length};
+  // 1) Préparation et validation de chaque note, sans rien écrire.
+  const prepared = [];
   for (let i = 0; i < cards.length; i++) {
     const c = cards[i];
     try {
@@ -224,10 +232,22 @@ async function importCards(deckName, cards) {
       fieldsObj[fields[0]] = plainToHtml(content);
       fieldsObj[fields[1]] = plainToHtml(c.type === 'cloze' ? c.extra || '' : c.back || '');
       const tags = [...new Set(['chatgpt', ...(Array.isArray(c.tags) ? c.tags : [])].map(normalizeTag).filter(Boolean))];
+      // Même règle de doublon que la vérification : collection entière, tous modèles.
       const note = {deckName, modelName: model, fields: fieldsObj, tags,
-        options: {allowDuplicate: false, duplicateScope: 'collection'}};
-      const canAdd = await anki('canAddNotes', {notes: [note]});
-      if (!canAdd?.[0]) { result.skipped++; continue; }
+        options: {allowDuplicate: false, duplicateScope: 'collection', duplicateScopeOptions: {checkAllModels: true}}};
+      prepared.push({i, note});
+    } catch (e) {
+      result.errors.push(`Carte ${i + 1} : ${e.message || e}`);
+      if (result.errors.length >= 12) { result.errors.push('Trop d’erreurs, import interrompu.'); return result; }
+    }
+  }
+  // 2) Un seul contrôle de doublons pour tout le lot (au lieu d'un appel par carte).
+  const canAdd = prepared.length ? await anki('canAddNotes', {notes: prepared.map(p => p.note)}) : [];
+  // 3) Écriture carte par carte : une erreur sur une carte n'empêche pas les autres.
+  for (let k = 0; k < prepared.length; k++) {
+    const {i, note} = prepared[k];
+    if (!canAdd?.[k]) { result.skipped++; continue; }
+    try {
       const id = await anki('addNote', {note});
       if (id === null || id === undefined) throw new Error('Anki a refusé cette carte.');
       result.added++;

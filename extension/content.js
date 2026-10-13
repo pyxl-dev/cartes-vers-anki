@@ -42,31 +42,70 @@
     }
     return anchor;
   }
+  /* Texte des blocs de code d'un message. On lit <code> en priorité : le <pre>
+     de ChatGPT contient aussi l'en-tête « json · Copier le code ». Les blocs sont
+     mis bout à bout : une réponse coupée puis reprise (« Continuer ») se recolle. */
+  function codeText(message) {
+    const codes = Array.from(message.querySelectorAll('pre code'));
+    const blocks = codes.length ? codes : Array.from(message.querySelectorAll('pre'));
+    return blocks.map(b => b.textContent || '').join('');
+  }
+  // Mémo par message : pendant l'écriture de la réponse, on ne réanalyse que si le texte a changé.
+  const parsedCache = new WeakMap();
+  function parsedFor(message) {
+    const text = codeText(message);
+    const hit = parsedCache.get(message);
+    if (hit && hit.text === text) return hit.parsed;
+    const parsed = AnkiCards.parse(text);
+    parsedCache.set(message, {text, parsed});
+    return parsed;
+  }
+  // Petite ligne d'explication sous le bouton : ce qui a été écarté, et pourquoi.
+  function parseNote(parsed) {
+    const parts = [];
+    if (parsed.rejected.length) parts.push(`${parsed.rejected.length} carte${parsed.rejected.length>1?'s':''} mal formée${parsed.rejected.length>1?'s':''} ignorée${parsed.rejected.length>1?'s':''}`);
+    if (parsed.truncated) parts.push('réponse incomplète : la dernière carte non terminée est ignorée');
+    if (parsed.cards.length > AnkiCards.MAX_CARDS) parts.push(`import par lots de ${AnkiCards.MAX_CARDS}`);
+    return parts.join(' · ');
+  }
   function scan() {
     const messages = assistantMessageContainers();
     for (const message of messages) {
-      const blocks = message.querySelectorAll('pre code, pre');
-      let cards = null;
-      for (const block of blocks) {
-        try { cards = AnkiCards.toCards(block.textContent); } catch (_) { /* contenu ordinaire */ }
-        if (cards) break;
-      }
-      if (!cards) { message.querySelector('.ankibridge-actions')?.remove(); continue; }
+      const parsed = parsedFor(message);
+      if (!parsed.cards.length) { message.querySelector('.ankibridge-actions')?.remove(); continue; }
       let wrap = message.querySelector('.ankibridge-actions');
       if (!wrap) {
         wrap = document.createElement('div');
         wrap.className = 'ankibridge-actions';
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'ankibridge-btn';
-        wrap.append(b);
         const anchor = layoutSafeAnchor(message.querySelector('pre'), message);
         if (anchor === message) message.append(wrap);
         else anchor.insertAdjacentElement('afterend', wrap);
       }
-      const btn = wrap.querySelector('.ankibridge-btn');
-      const label = `Ajouter ${cards.length} carte${cards.length>1?'s':''} à Anki`;
-      if (btn.textContent !== label) btn.textContent = label;
-      btn.onclick = () => showModal(cards);
+      // Plus de 100 cartes : un bouton par lot de 100, chacun avec sa propre vérification.
+      const lots = AnkiCards.chunks(parsed.cards);
+      const labels = lots.map(lot => lots.length === 1
+        ? `Ajouter ${lot.cards.length} carte${lot.cards.length>1?'s':''} à Anki`
+        : `Lot ${lots.indexOf(lot)+1} : ajouter les cartes ${lot.from} à ${lot.to}`);
+      let buttons = Array.from(wrap.querySelectorAll('.ankibridge-btn'));
+      while (buttons.length > lots.length) buttons.pop().remove();
+      while (buttons.length < lots.length) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ankibridge-btn';
+        const info = wrap.querySelector('.ankibridge-parsenote');
+        if (info) wrap.insertBefore(b, info); else wrap.append(b);
+        buttons.push(b);
+      }
+      lots.forEach((lot, i) => {
+        const btn = buttons[i];
+        if (btn.textContent !== labels[i]) btn.textContent = labels[i];
+        btn.onclick = () => showModal(lot.cards, {parsed, lot, lots: lots.length});
+      });
+      const noteText = parseNote(parsed);
+      let note = wrap.querySelector('.ankibridge-parsenote');
+      if (noteText) {
+        if (!note) { note = document.createElement('span'); note.className = 'ankibridge-parsenote'; wrap.append(note); }
+        if (note.textContent !== noteText) note.textContent = noteText;
+      } else note?.remove();
     }
   }
   function el(tag, className, text) {
@@ -203,12 +242,13 @@
       actions.append(ok, cancel); box.append(actions); dialog.append(box);
     });
   }
-  async function showModal(cards) {
+  async function showModal(cards, info = {}) {
     document.querySelector('.ankibridge-overlay')?.remove();
     const overlay = el('div','ankibridge-overlay');
     const dialog = el('section','ankibridge-dialog'); dialog.setAttribute('role','dialog'); dialog.setAttribute('aria-modal','true');
     const head = el('div','ankibridge-head');
-    head.append(el('h2','',`Vérifier ${cards.length} cartes avant import`));
+    const lotLabel = info.lots > 1 ? ` (lot ${info.lot.from}–${info.lot.to})` : '';
+    head.append(el('h2','',`Vérifier ${cards.length} cartes avant import${lotLabel}`));
     const close = el('button','ankibridge-close','×'); close.type='button'; close.setAttribute('aria-label','Fermer'); close.onclick=()=>closeModal();
     head.append(close); dialog.append(head);
     const main = el('div','ankibridge-main');
@@ -235,6 +275,20 @@
       legend.append(cell);
     }
     main.append(legend);
+    // Cartes écartées à la lecture : listées pour pouvoir les redemander à ChatGPT.
+    const rejected = info.parsed?.rejected || [];
+    if (rejected.length || info.parsed?.truncated) {
+      const warn = el('details','ankibridge-rejected');
+      const n = rejected.length;
+      warn.append(el('summary','', [
+        n ? `${n} carte${n>1?'s':''} ignorée${n>1?'s':''} car mal formée${n>1?'s':''}` : '',
+        info.parsed?.truncated ? 'réponse de ChatGPT incomplète (dernière carte non terminée)' : ''
+      ].filter(Boolean).join(' · ')));
+      for (const r of rejected.slice(0, 20)) warn.append(el('p','',r.reason));
+      if (n > 20) warn.append(el('p','',`… et ${n-20} autre(s).`));
+      warn.append(el('p','ankibridge-rejectedhint','Astuce : demande à ChatGPT « Corrige ces cartes » ou « Continue à partir de la dernière carte », puis importe le nouveau bloc.'));
+      main.append(warn);
+    }
     const entries=[];
     cards.forEach((card,i)=>{
       /* Structure de ligne volontairement NON imbriquée : la case d'import et le

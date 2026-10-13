@@ -107,3 +107,15 @@
   font:600 12px system-ui; line-height:1.25; text-align:center; cursor:pointer}
 .ankibridge-btn:hover {background:#d6eedf}
 
+/* Plusieurs lots de 100 : boutons côte à côte, avec un petit espace. */
+.ankibridge-btn + .ankibridge-btn {margin-left:6px}
+/* Ce qui a été écarté à la lecture du JSON (cartes mal formées, réponse coupée). */
+.ankibridge-parsenote {display:block; margin-top:4px; font:12px system-ui; color:#92400e}
+.ankibridge-rejected {margin:8px 0; padding:8px 10px; border:1px solid #f3c98b; border-radius:8px; background:#fff8ec; color:#78350f; font:12px system-ui}
+.ankibridge-rejected summary {cursor:pointer; font-weight:600}
+.ankibridge-rejected p {margin:4px 0 0}
+.ankibridge-rejectedhint {font-style:italic}
+@media (prefers-color-scheme: dark) {
+  .ankibridge-parsenote {color:#fbbf24}
+  .ankibridge-rejected {background:#2a2112; border-color:#7c5a1e; color:#fde68a}
+}
