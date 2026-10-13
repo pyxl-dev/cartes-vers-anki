@@ -58,20 +58,24 @@
     const headTools = el('div','ankibridge-headtools');
     headTools.append(theme.button, close);
     head.append(headTools); dialog.append(head);
+    // Réglages en haut (paquet, sélection, légende) : toujours visibles ; seule
+    // la liste des cartes défile en dessous.
+    const top = el('div','ankibridge-top');
+    dialog.append(top);
     const main = el('div','ankibridge-main');
     const control = el('div','ankibridge-control');
     control.append(el('span','ankibridge-decklabel','Paquet Anki :'));
     const picker = createDeckPicker([], name => onDeckSelected(name), {onCreate: name => onCreateDeck(name)});
     const analyze = el('button','ankibridge-review','Relancer la comparaison');
     analyze.type='button'; analyze.disabled=true;
-    control.append(picker.root, analyze); main.append(control);
+    control.append(picker.root, analyze); top.append(control);
     // Sélection en masse : les cartes déjà présentes ne sont jamais cochées par défaut.
     const bulk = el('div','ankibridge-bulk');
     const selectNew = el('button','ankibridge-selectnew','Tout sélectionner (cartes nouvelles)');
     const selectNone = el('button','ankibridge-selectnone','Tout désélectionner');
     const count = el('span','ankibridge-count','0 sélectionnée(s)');
     selectNew.type='button'; selectNone.type='button';
-    bulk.append(selectNew, selectNone, count); main.append(bulk);
+    bulk.append(selectNew, selectNone, count); top.append(bulk);
     // Légende discrète : le statut ne repose jamais sur la seule couleur.
     const legend=el('div','ankibridge-legend');
     for(const [cls,word] of [['new','Nouvelle'],['similar','Formulation similaire'],['exact','Déjà présente (non réimportable)']]){
@@ -81,7 +85,7 @@
       cell.append(d, document.createTextNode(' '+word));
       legend.append(cell);
     }
-    main.append(legend);
+    top.append(legend);
     // Cartes écartées à la lecture : listées pour pouvoir les redemander à ChatGPT.
     const rejected = info.parsed?.rejected || [];
     if (rejected.length || info.parsed?.truncated) {

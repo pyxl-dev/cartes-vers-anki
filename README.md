@@ -91,7 +91,7 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 3. Un bouton **« Ajouter N cartes à Anki »** apparaît automatiquement sous la réponse. Au-delà de 100 cartes, un bouton par **lot de 100** (« Lot 2 : ajouter les cartes 101 à 200 »).
 
    La lecture est **tolérante** : une carte mal formée est écartée seule (avec sa raison, listée dans la fenêtre de vérification) au lieu de bloquer tout le lot ; une réponse **coupée** par ChatGPT donne les cartes complètes, la dernière carte incomplète étant ignorée ; plusieurs blocs de code dans la même réponse sont **additionnés**.
-4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet.
+4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet. Le haut de la fenêtre (paquet, boutons de sélection, légende) et le bas (message, bouton d'import) restent **fixes** : seule la liste des cartes défile.
 
    **Éditeur visuel.** Chaque champ (question, réponse, texte à trous, précisions) se modifie **mis en forme**, comme dans un traitement de texte : barre d'outils **G** (gras), *I* (italique), x² (exposant), x₂ (indice), listes à puces et numérotées, « Effacer » la mise en forme ; Ctrl/Cmd+B et Ctrl/Cmd+I fonctionnent aussi. Un collage arrive toujours en **texte simple**. Le lien **« Texte brut »** montre le texte exact envoyé à Anki (avec son aperçu) pour qui préfère l'écrire à la main.
 
@@ -239,11 +239,11 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 230 tests
+node tests/test.cjs          # extension : 231 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-230 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
+231 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
 
 - lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;

@@ -1530,6 +1530,21 @@ async function contentTests() {
     assert.equal(ov.querySelector('.ankibridge-holeinput').value, '<img src=x onerror=alert(1)>');
   });
 
+  await ta('mise en page : réglages fixes en haut, seule la liste des cartes défile', async () => {
+    const ov = await openModal(respondOk(items2), HOLES);
+    const top = ov.querySelector('.ankibridge-top'), main = ov.querySelector('.ankibridge-main');
+    for (const sel of ['.ankibridge-deckinput', '.ankibridge-review', '.ankibridge-selectnew', '.ankibridge-selectnone', '.ankibridge-count', '.ankibridge-legend']) {
+      assert.ok(top.querySelector(sel), sel + ' dans la partie fixe');
+      assert.equal(main.querySelector(sel), null, sel + ' hors de la zone qui défile');
+    }
+    assert.equal(main.querySelectorAll('.ankibridge-row').length, 2, 'les cartes défilent');
+    const order = ov.querySelector('.ankibridge-dialog').children.map(c => c.className);
+    assert.deepEqual(order.slice(0, 4), ['ankibridge-head', 'ankibridge-top', 'ankibridge-main', 'ankibridge-foot']);
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    assert.match(css, /\.ankibridge-main\{flex:1 1 auto;min-height:0;[^}]*overflow:auto/);
+    assert.match(css, /\.ankibridge-top\{flex:none;position:relative;z-index:3/);
+  });
+
   /* --- 1.6.0 : champ paquet et création --- */
   const deckServer = (decks, log, n = 13) => msg => {
     log.push(msg);
