@@ -10,7 +10,7 @@
    - Un collage est toujours inséré en texte simple. Aucun HTML venant de ChatGPT
      ou du presse-papiers n'est interprété : DOM construit avec createElement. */
 (() => {
-  const {parseFormatting, clozesOf, splitAnswer, setClozeAnswer, removeCloze, addCloze, domToMarkdown} = AnkiShared;
+  const {parseFormatting, clozesOf, splitAnswer, setClozeAnswer, setClozeNumber, removeCloze, addCloze, domToMarkdown} = AnkiShared;
   const {el} = AnkiPicker;
   const TOOLS = [
     ['bold', 'G', 'Gras (Ctrl+B)', 'bold'],
@@ -29,8 +29,16 @@
     const hole = el('span','ankibridge-hole');
     hole.setAttribute('contenteditable','false');
     hole.setAttribute('data-src', src);
-    const num = el('span','ankibridge-holenum', String(cz.n));
-    num.setAttribute('title', `Ce trou est caché dans la carte n° ${cz.n}`);
+    // Pastille = numéro de carte. Un clic ouvre le choix : même carte qu'un autre
+    // trou (cachés ensemble) ou nouvelle carte.
+    const num = el('button','ankibridge-holenum', String(cz.n));
+    num.type = 'button';
+    num.setAttribute('aria-haspopup','menu');
+    num.setAttribute('aria-expanded','false');
+    num.setAttribute('aria-label', `Trou ${k + 1} : carte n° ${cz.n}. Changer de carte`);
+    num.setAttribute('title', `Carte n° ${cz.n} — cliquer pour changer`);
+    num.addEventListener('mousedown', e => e.preventDefault());
+    num.onclick = () => hooks.menu(k, hole, num);
     const {value, wrap} = splitAnswer(cz.content);
     const input = el('input','ankibridge-holeinput');
     input.type = 'text';
@@ -146,13 +154,81 @@
       fromEditor = false;
     };
     const sync = () => commit(domToMarkdown(editor));
-    const hooks = {say, sync, remove: k => {
+    // Menu du numéro de carte d'un trou.
+    let openMenu = null;
+    const closeMenu = () => {
+      if (!openMenu) return;
+      openMenu.menu.remove();
+      openMenu.button.setAttribute('aria-expanded','false');
+      document.removeEventListener('mousedown', openMenu.outside, true);
+      document.removeEventListener('scroll', closeMenu, true);
+      openMenu = null;
+    };
+    const menu = (k, hole, button) => {
+      const wasOpen = openMenu && openMenu.button === button;
+      closeMenu();
+      if (wasOpen) return;
+      const md = domToMarkdown(editor);
+      const all = clozesOf(md);
+      const mine = all[k];
+      if (!mine) return;
+      const used = [...new Set(all.map(c => c.n))].sort((a, b) => a - b);
+      const alone = all.filter(c => c.n === mine.n).length === 1;
+      const next = used[used.length - 1] + 1;
+      const box = el('div','ankibridge-holemenu');
+      box.setAttribute('role','menu');
+      box.setAttribute('contenteditable','false');
+      const pick = n => {
+        closeMenu();
+        if (n === mine.n) return;
+        const r = setClozeNumber(md, k, n);
+        if (!r.ok) { say(r.error, true); return; }
+        commit(r.text); paint();
+        const others = clozesOf(r.text).filter(c => c.n === n).length - 1;
+        say(others ? `Trou placé sur la carte n° ${n} : caché en même temps que ${others} autre${others > 1 ? 's' : ''} trou${others > 1 ? 's' : ''}.`
+          : `Trou placé seul sur la carte n° ${n}.`);
+      };
+      const item = (n, text) => {
+        const b = el('button','ankibridge-holemenuitem' + (n === mine.n ? ' current' : ''), text);
+        b.type = 'button';
+        b.setAttribute('role','menuitemradio');
+        b.setAttribute('aria-checked', n === mine.n ? 'true' : 'false');
+        b.addEventListener('mousedown', e => e.preventDefault());
+        b.onclick = () => pick(n);
+        b.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); button.focus(); } });
+        return b;
+      };
+      for (const n of used) {
+        const count = all.filter(c => c.n === n).length;
+        box.append(item(n, `Carte ${n}` + (n === mine.n ? ' (actuelle)' : count > 1 ? ` — ${count} trous` : '')));
+      }
+      if (!(alone && mine.n === used[used.length - 1])) box.append(item(next, `Nouvelle carte (n° ${next})`));
+      box.append(el('p','ankibridge-holemenuhint','Même numéro = trous cachés ensemble sur la même carte.'));
+      hole.append(box);
+      // Position fixe calculée sous la pastille (ou au-dessus s'il manque de la
+      // place) : le menu n'est jamais coupé par la zone d'édition qui défile.
+      const r = button.getBoundingClientRect?.();
+      if (r) {
+        const h = box.getBoundingClientRect?.().height || 0;
+        const below = r.bottom + 4 + h <= (window.innerHeight || Infinity);
+        box.style.left = Math.max(8, Math.min(r.left, (window.innerWidth || 1e9) - 230)) + 'px';
+        box.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - h)) + 'px';
+      }
+      document.addEventListener('scroll', closeMenu, true);
+      button.setAttribute('aria-expanded','true');
+      const outside = e => { if (!box.contains(e.target) && e.target !== button) closeMenu(); };
+      document.addEventListener('mousedown', outside, true);
+      openMenu = {menu: box, button, outside};
+      box.querySelector('.ankibridge-holemenuitem')?.focus?.();
+    };
+    const hooks = {say, sync, menu, remove: k => {
       const r = removeCloze(domToMarkdown(editor), k);
       if (!r.ok) { say(r.error, true); return; }
       commit(r.text); paint();
       say('Trou retiré : le texte reste dans la carte.');
     }};
     const paint = () => {
+      closeMenu();
       const n = renderEditable(editor, area.value, hooks);
       if (clozes && !n) say('Aucun trou : sélectionne un mot, puis « Transformer la sélection en trou ».', true);
       return n;

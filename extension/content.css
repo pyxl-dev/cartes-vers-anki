@@ -114,8 +114,17 @@
 .ankibridge-rich .ankibridge-holemsg:empty{display:none}
 .ankibridge-hole{display:inline-flex;align-items:center;gap:3px;margin:0 2px;padding:1px 3px 1px 2px;border-radius:7px;
   background:#dbeafe;border:1px solid #93c5fd;vertical-align:baseline;line-height:1.4}
-.ankibridge-holenum{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;
-  background:#1d4ed8;color:#fff;font:700 11px system-ui;padding:0 4px}
+.ankibridge-holenum{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:10px;
+  border:0;background:#1d4ed8;color:#fff;font:700 11px system-ui;padding:0 5px;cursor:pointer}
+.ankibridge-holenum:hover,.ankibridge-holenum[aria-expanded="true"]{box-shadow:0 0 0 3px rgba(29,78,216,.3)}
+.ankibridge-holenum:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.ankibridge-hole{position:relative}
+.ankibridge-holemenu{position:fixed;left:0;top:0;z-index:2147483601;min-width:200px;max-width:260px;padding:4px;border:1px solid #cbd5e1;
+  border-radius:8px;background:#fff;box-shadow:0 10px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:2px;line-height:1.4;white-space:normal}
+.ankibridge-holemenuitem{text-align:left;border:0;background:none;padding:6px 8px;border-radius:6px;font:600 13px system-ui;color:#111827;cursor:pointer}
+.ankibridge-holemenuitem:hover,.ankibridge-holemenuitem:focus-visible{background:#eef2ff;outline:none}
+.ankibridge-holemenuitem.current{color:#1d4ed8}
+.ankibridge-holemenuhint{margin:4px 8px 2px;font:12px system-ui;color:#6b7280}
 .ankibridge-holeinput{box-sizing:content-box;border:1px solid #93c5fd;border-radius:5px;background:#fff;color:#1e3a8a;
   font:600 14px system-ui;padding:1px 6px;min-width:3ch;max-width:100%}
 .ankibridge-holeinput.bold{font-weight:800}
@@ -248,3 +257,8 @@
 .ankibridge-dupdetails,.ankibridge-diffdetails{margin-top:4px}
 .ankibridge-dupdetails summary,.ankibridge-diffdetails summary{cursor:pointer;font-size:12px;color:#1d4ed8;font-weight:600}
 .ankibridge-dark .ankibridge-dupdetails summary,.ankibridge-dark .ankibridge-diffdetails summary{color:#93c5fd}
+.ankibridge-dark .ankibridge-holemenu{background:#1b2027;border-color:#39414c}
+.ankibridge-dark .ankibridge-holemenuitem{color:#e6eaf0}
+.ankibridge-dark .ankibridge-holemenuitem:hover,.ankibridge-dark .ankibridge-holemenuitem:focus-visible{background:#273042}
+.ankibridge-dark .ankibridge-holemenuitem.current{color:#93c5fd}
+.ankibridge-dark .ankibridge-holemenuhint{color:#a8b2bd}

@@ -1483,6 +1483,33 @@ async function contentTests() {
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /ni « \}\} »/);
     assert.equal(area.value, 'Le **processus** DHCP suit {{c1::**DORA**}}.\n- appelé {{c2::DORA::acronyme}}', 'carte inchangée');
   });
+  await ta('trous : la pastille change le numéro de carte (même carte ou nouvelle)', async () => {
+    const cardsJson = JSON.stringify({ cards: [{ type: 'cloze', text: 'Une adresse {{c2::IPv4}} par DHCP : {{c1::DORA}}.', extra: '' }] });
+    const ov = await openModal(respondOk([anItem('new')]), cardsJson);
+    const row = rowsOf(ov)[0];
+    const area = row.querySelectorAll('textarea')[0];
+    const pills = () => row.querySelectorAll('.ankibridge-holenum');
+    assert.deepEqual(pills().map(p => p.textContent), ['2', '1']);
+    assert.equal(pills()[0].tagName, 'BUTTON', 'pastille cliquable');
+    pills()[0].onclick();
+    const items = () => row.querySelectorAll('.ankibridge-holemenuitem').map(b => b.textContent);
+    assert.deepEqual(items(), ['Carte 1', 'Carte 2 (actuelle)'], 'déjà seul sur la dernière carte : pas de « nouvelle carte » inutile');
+    assert.equal(pills()[0].getAttribute('aria-expanded'), 'true');
+    assert.match(row.querySelector('.ankibridge-holemenuhint').textContent, /Même numéro = trous cachés ensemble/);
+    row.querySelectorAll('.ankibridge-holemenuitem')[0].onclick();
+    assert.equal(area.value, 'Une adresse {{c1::IPv4}} par DHCP : {{c1::DORA}}.', 'même carte : même numéro');
+    assert.match(row.querySelector('.ankibridge-holemsg').textContent, /carte n° 1 : caché en même temps que 1 autre trou/);
+    assert.equal(row.querySelector('.ankibridge-holemenu'), null, 'menu refermé');
+    assert.deepEqual(pills().map(p => p.textContent), ['1', '1']);
+    pills()[1].onclick();
+    assert.deepEqual(items(), ['Carte 1 (actuelle)', 'Nouvelle carte (n° 2)']);
+    row.querySelectorAll('.ankibridge-holemenuitem')[1].onclick();
+    assert.equal(area.value, 'Une adresse {{c1::IPv4}} par DHCP : {{c2::DORA}}.', 'nouvelle carte');
+    assert.match(row.querySelector('.ankibridge-holemsg').textContent, /seul sur la carte n° 2/);
+    pills()[0].onclick(); pills()[0].onclick();
+    assert.equal(row.querySelector('.ankibridge-holemenu'), null, 'second clic : menu refermé');
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/, 'carte modifiée : comparaison à relancer');
+  });
   await ta('trous : × retire le trou (texte gardé) ; une sélection devient un trou', async () => {
     const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, HOLES))] }, respondOk(items2));
     await new Promise(r => setTimeout(r, 700));
@@ -2736,6 +2763,10 @@ function formatTests() {
     assert.equal(S.setClozeAnswer(text, 1, 'K^+^').text, 'DHCP : {{c1::**Discover → ACK**}}.\n- ion {{c2::K^+^::cation}}', 'indice conservé');
     for (const bad of ['', '   ', 'a}}b', 'a{{b', 'a::b', 'a\nb']) assert.equal(S.setClozeAnswer(text, 0, bad).ok, false, JSON.stringify(bad));
     assert.equal(S.setClozeAnswer(text, 5, 'x').ok, false, 'trou inexistant');
+    assert.equal(S.setClozeNumber(text, 1, 1).text, 'DHCP : {{c1::**Discover → ACK**}}.\n- ion {{c1::Na^+^::cation}}', 'numéro changé, contenu et indice intacts');
+    assert.equal(S.setClozeNumber(text, 0, 12).text.startsWith('DHCP : {{c12::**Discover'), true);
+    for (const bad of [0, -1, 1.5, 'x', 1000]) assert.equal(S.setClozeNumber(text, 0, bad).ok, false, String(bad));
+    assert.equal(S.setClozeNumber(text, 7, 1).ok, false, 'trou inexistant');
     assert.equal(S.removeCloze(text, 0).text, 'DHCP : **Discover → ACK**.\n- ion {{c2::Na^+^::cation}}', 'le texte reste, sans marqueur');
   });
   t('trous : une sélection devient un trou, jamais au prix d’une mise en forme cassée', () => {

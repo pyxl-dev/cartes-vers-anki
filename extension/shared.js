@@ -252,6 +252,18 @@
     if (!cz) return {ok: false, error: 'Trou introuvable : la carte a changé.'};
     return {ok: true, text: src.slice(0, cz.start) + cz.content + src.slice(cz.end)};
   }
+  /* Change le numéro du k-ième trou : même numéro = cachés ensemble sur la même
+     carte ; numéros différents = une carte par numéro. Seul « {{cN:: » change. */
+  function setClozeNumber(text, k, n) {
+    const src = String(text ?? '');
+    const cz = clozesOf(src)[k];
+    if (!cz) return {ok: false, error: 'Trou introuvable : la carte a changé.'};
+    const num = Number(n);
+    if (!Number.isInteger(num) || num < 1 || num > 999) return {ok: false, error: 'Numéro de carte invalide.'};
+    const prefix = `{{c${num}::`;
+    const oldPrefix = src.slice(cz.start, cz.cStart);
+    return {ok: true, text: src.slice(0, cz.start) + prefix + src.slice(cz.start + oldPrefix.length)};
+  }
   // Nouveau trou sur [start, end[ du texte source : numéro suivant (= nouvelle carte).
   function addCloze(text, start, end) {
     const src = String(text ?? '');
@@ -492,6 +504,6 @@
     normText, deckLabel, validateDeckName, sameDeck, normalizeTag, MAX_DECK_NAME,
     escapeHtml, htmlToText,
     toAnkiHtml, stripMarkdown, hasFormatting, renderInto, parseFormatting: parse,
-    clozesOf, splitAnswer, answerError, setClozeAnswer, removeCloze, addCloze, readableTitle, domToMarkdown
+    clozesOf, splitAnswer, answerError, setClozeAnswer, setClozeNumber, removeCloze, addCloze, readableTitle, domToMarkdown
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
