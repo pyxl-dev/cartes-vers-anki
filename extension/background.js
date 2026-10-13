@@ -340,7 +340,7 @@ async function locateExact(firstFieldText, modelName, {fresh = false} = {}) {
     .reduce((best, part) => (part.length > best.length ? part : best), '') || plain;
   let value;
   try {
-    const ids = await anki('findNotes', {query: quotedQuery(term)});
+    const ids = await anki('findNotes', {query: quotedText(term)});
     if (!Array.isArray(ids) || !ids.length) value = {matches: [], searched: true};
     else if (ids.length > MAX_LOCATE_CANDIDATES) {
       // Trop de candidats pour les examiner TOUS : l'unicité ne peut pas être
@@ -577,6 +577,13 @@ async function replaceNotes(replacements) {
 function quotedQuery(value) {
   const cleaned=String(value??'').trim().replace(/[\r\n]/g,' ').slice(0,150);
   return '"'+cleaned.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"';
+}
+/* Texte cherché DANS les champs : « : » sépare un nom de champ, « * » et « _ » sont
+   des jokers. Non échappés, « Question : … » ou « {{c1::… » ne trouvaient rien et
+   le doublon restait « non localisé » (vérifié sur un vrai Anki). */
+function quotedText(value) {
+  const cleaned=String(value??'').trim().replace(/[\r\n]/g,' ').slice(0,150);
+  return '"'+cleaned.replace(/[\\"*_:]/g,'\\$&')+'"';
 }
 async function searchNotes(deck, term, offset=0) {
   const decks=await anki('deckNames');

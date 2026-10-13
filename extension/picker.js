@@ -38,7 +38,8 @@
     let active = -1;
     let seq = 0;
     function filtered(query) {
-      const words = normText(query).split(/\s+/).filter(Boolean);
+      // « Parent::Enfant » ou « Parent › Enfant » tapé en entier doit aussi trouver le paquet.
+      const words = normText(query).replace(/::|›/g, ' ').split(/\s+/).filter(Boolean);
       if (!words.length) return pool.slice();
       return pool.filter(name => {
         const hay = normText(name).replace(/::/g, ' ');

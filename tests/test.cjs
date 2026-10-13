@@ -1437,6 +1437,15 @@ async function contentTests() {
     assert.equal(createOption(ov).getAttribute('role'), 'option');
     assert.ok(ov.querySelector('.ankibridge-deckempty'), '« Aucun résultat » reste affiché');
   });
+  await ta('recherche : le nom complet « Parent::Enfant » (ou « › ») trouve le paquet existant', async () => {
+    const ov = await openModal(deckServer(['Cours', 'Test Cartes vers Anki::1.6.0'], []));
+    for (const q of ['Test Cartes vers Anki::1.6.0', 'test cartes vers anki › 1.6.0']) {
+      const opts = pickerOptions(ov, q);
+      assert.equal(opts.length, 1, q);
+      assert.equal(opts[0].getAttribute('data-value'), 'Test Cartes vers Anki::1.6.0');
+      assert.equal(createOption(ov), null, 'paquet existant : pas de création');
+    }
+  });
   await ta('création : nom invalide expliqué, aucune option de création', async () => {
     const ov = await openModal(deckServer(['Cours'], []));
     for (const [query, why] of [['Cours "3"', /guillemets/], ['A::', /niveau/], ['x'.repeat(151), /trop long/]]) {
@@ -1573,7 +1582,11 @@ function startMockAnki2() {
     if (deck) ids = ids.filter(id => { const d = state.notes.get(id).deck; return d === deck || d.startsWith(deck + '::'); });
     const tm = rest.match(/^"([\s\S]+)"$/);
     if (tm) {
-      const needle = tm[1].replace(/\\"/g, '"').toLowerCase();
+      // Comme le vrai Anki (vérifié) : un « : » non échappé lance une recherche par
+      // champ (« champ:texte ») et ne trouve rien ici ; « \: », « \* », « \_ », « \" »
+      // désignent le caractère lui-même.
+      if (/(^|[^\\]):/.test(tm[1])) return [];
+      const needle = tm[1].replace(/\\(.)/g, '$1').toLowerCase();
       ids = ids.filter(id => Object.values(state.notes.get(id).fields).some(f => fieldValue(f).toLowerCase().includes(needle)));
     }
     return ids;
@@ -1819,6 +1832,22 @@ async function replaceTests() {
     for (const a of state.actions) {
       assert.ok(!['deleteNotes', 'deleteDecks', 'changeDeck', 'removeNotes', 'deleteCards', 'deleteModels', 'removeEmptyNotes'].includes(a), 'action destructive : ' + a);
     }
+  });
+  /* --- 1.6.0 : localisation vérifiée sur un vrai Anki --- */
+  await ta('recherche Anki : « : », « * », « _ » et « " » échappés, recherche de paquet inchangée', async () => {
+    assert.equal(ctx.quotedText('Question : a*b_c "x" \\'), '"Question \\: a\\*b\\_c \\"x\\" \\\\"');
+    assert.equal(ctx.quotedQuery('Cardio::Cours 3'), '"Cardio::Cours 3"');
+  });
+  await ta('doublon localisé malgré « : » et un trou {{c1::…}} mis en forme', async () => {
+    const nColon = add('Basique', ['<b>Ion</b> majoritaire : Na<sup>+</sup> ?', 'r'], 'Par défaut');
+    const nCloze = add('Texte à trous', ['L’eau : {{c1::H<sub>2</sub>O::formule}}', ''], 'Par défaut');
+    const r = await send(listeners, { type: 'ANALYZE', deck: 'Par défaut', cards: [
+      { type: 'basic', front: '**Ion** majoritaire : Na^+^ ?', back: 'r' },
+      { type: 'cloze', text: 'L’eau : {{c1::H~2~O::formule}}', extra: '' }] });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(plain(r.value.items.map(i => i.kind)), ['exact', 'exact']);
+    assert.deepEqual(plain(r.value.items.map(i => i.duplicates.map(d => d.id))), [[nColon], [nCloze]], 'les deux doublons sont localisés');
+    assert.equal(r.value.items[0].replaceable, true);
   });
   /* --- régression review PR #2 : sûreté du remplacement --- */
   await ta('P1 : plus de 60 candidats -> unicité non prouvable, remplacement refusé', async () => {
