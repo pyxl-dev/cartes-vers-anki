@@ -218,10 +218,8 @@ async function addPrepared(prepared) {
   }
   return out;
 }
-async function importCards(deckName, cards, batchTag = '') {
+async function importCards(deckName, cards) {
   if (!Array.isArray(cards) || !cards.length || cards.length > 100) throw new Error('Import limité à 1–100 cartes par lot.');
-  // Tag commun au lot : ajouté à chaque carte EN PLUS de ses 8 tags au maximum.
-  const lotTag = normalizeTag(typeof batchTag === 'string' ? batchTag.slice(0, 200) : '');
   const decks = await anki('deckNames');
   if (!decks.includes(deckName)) throw new Error('Paquet introuvable. Crée-le depuis la fenêtre de vérification ou dans Anki, puis actualise la liste.');
   const models = await anki('modelNames');
@@ -249,7 +247,7 @@ async function importCards(deckName, cards, batchTag = '') {
       fieldsObj[fields[0]] = fieldHtml(content);
       fieldsObj[fields[1]] = fieldHtml(c.type === 'cloze' ? c.extra || '' : c.back || '');
       const own = (Array.isArray(c.tags) ? c.tags : []).filter(x => typeof x === 'string').slice(0, 8);
-      const tags = [...new Set(['chatgpt', ...own].map(normalizeTag).concat(lotTag).filter(Boolean))];
+      const tags = [...new Set(['chatgpt', ...own].map(normalizeTag).filter(Boolean))];
       // Même règle de doublon que la vérification : collection entière, tous modèles.
       const note = {deckName, modelName: model, fields: fieldsObj, tags,
         options: {allowDuplicate: false, duplicateScope: 'collection', duplicateScopeOptions: {checkAllModels: true}}};
@@ -275,7 +273,6 @@ async function importCards(deckName, cards, batchTag = '') {
     else hidden++;
   });
   if (hidden) result.errors.push(`… et ${hidden} autre(s) erreur(s).`);
-  if (lotTag) result.batchTag = lotTag;
   lastIndex = null;
   return result;
 }
@@ -641,7 +638,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'SEARCH': return await searchNotes(message.deck,message.term,message.offset);
       case 'ANALYZE': return await analyzeCards(message.deck,message.cards);
       case 'PING': return await anki('version');
-      case 'IMPORT': return await importCards(message.deck, message.cards, message.batchTag);
+      case 'IMPORT': return await importCards(message.deck, message.cards);
       case 'CREATE_DECK': return await createDeck(message.deck);
       case 'REPLACE': return await replaceNotes(message.replacements);
       default: throw new Error('Action non autorisée.');

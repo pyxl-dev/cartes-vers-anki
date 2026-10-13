@@ -1,14 +1,13 @@
 'use strict';
 /* Fenêtre de vérification avant import : liste des cartes modifiables avec leur
-   aperçu mis en forme, choix (ou création) du paquet, tag commun au lot,
+   éditeur visuel, choix (ou création) du paquet,
    comparaison avec Anki, import et remplacement sûr.
    Ouverte par content.js (bouton sous la réponse de ChatGPT). Tout le contenu
    venant de ChatGPT ou d'Anki est inséré avec textContent, jamais comme du HTML. */
 (() => {
-  const {deckLabel, normalizeTag, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
+  const {deckLabel, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
   const {richEditor} = AnkiRich;
   const {createDeckPicker, askConfirm, themeControl, el} = AnkiPicker;
-  const TAG_KEY = 'batchTag';   // dernier tag du lot, proposé à l'ouverture suivante
   const api = (type, extra={}) => new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({type,...extra}, res => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -66,19 +65,6 @@
     const analyze = el('button','ankibridge-review','Relancer la comparaison');
     analyze.type='button'; analyze.disabled=true;
     control.append(picker.root, analyze); main.append(control);
-    // Tag commun à tout le lot (facultatif), mémorisé pour la prochaine fois.
-    const tagRow = el('div','ankibridge-tagrow');
-    const tagLabel = el('label','ankibridge-taglabel','Tag du lot (facultatif)');
-    const tagInput = el('input','ankibridge-taginput');
-    tagInput.type = 'text';
-    tagInput.setAttribute('autocomplete','off');
-    tagInput.setAttribute('maxlength','100');
-    tagInput.setAttribute('placeholder','ex. Cardio::Cours_3');
-    tagLabel.append(tagInput);
-    const tagHint = el('span','ankibridge-taghint','Ajouté à toutes les cartes importées, en plus de leurs propres tags.');
-    tagHint.setAttribute('id','ankibridge-taghint');
-    tagInput.setAttribute('aria-describedby','ankibridge-taghint');
-    tagRow.append(tagLabel, tagHint); main.append(tagRow);
     // Sélection en masse : les cartes déjà présentes ne sont jamais cochées par défaut.
     const bulk = el('div','ankibridge-bulk');
     const selectNew = el('button','ankibridge-selectnew','Tout sélectionner (cartes nouvelles)');
@@ -167,17 +153,8 @@
     });
     dialog.append(main);
     const foot=el('div','ankibridge-foot'); const msg=el('span','ankibridge-msg','Anki doit être ouvert. Aucune donnée ne part vers un service tiers.');
-    // Récapitulatif toujours visible avant l'import : nombre, paquet et tag du lot.
-    const recap=el('p','ankibridge-recap');
-    recap.setAttribute('aria-live','polite');
-    const lotTag=()=>normalizeTag(tagInput.value);
-    const updateRecap=()=>{
-      const n=entries.filter(e=>e.check.checked).length;
-      const tag=lotTag();
-      recap.textContent=`Récapitulatif : ${n} carte(s) → paquet « ${picker.value?deckLabel(picker.value):'à choisir'} » · `+
-        (tag?`tag du lot « ${tag} »`:'sans tag du lot');
-    };
-    const replaceBtn=el('button','ankibridge-replace','Remplacer les notes existantes'); replaceBtn.type='button'; replaceBtn.disabled=true;
+    // N'apparaît que si au moins une mise à jour de note est cochée.
+    const replaceBtn=el('button','ankibridge-replace','Remplacer les notes existantes'); replaceBtn.type='button'; replaceBtn.disabled=true; replaceBtn.hidden=true;
     const save=el('button','ankibridge-action','Importer dans Anki'); save.type='button'; save.disabled=true;
     const currentCards=()=>entries.map(e=>({
       ...e.card,
@@ -192,12 +169,14 @@
     const updateCount=()=>{
       const n=entries.filter(e=>e.check.checked).length;
       count.textContent=`${n} sélectionnée(s) sur ${entries.length}`;
-      updateRecap();
+      // Le bouton dit ce qu'il va faire : plus besoin de récapitulatif.
+      save.textContent=n?`Importer ${n} carte${n>1?'s':''}`:'Importer dans Anki';
     };
     const updateReplaceState=()=>{
       const n=entries.filter(e=>e.replace?.checked).length;
       replaceBtn.disabled = !verified || n===0;
-      replaceBtn.textContent = n ? `Remplacer ${n} note(s) existante(s)` : 'Remplacer les notes existantes';
+      replaceBtn.hidden = n===0;
+      replaceBtn.textContent = n ? `Mettre à jour ${n} note${n>1?'s':''} dans Anki` : 'Remplacer les notes existantes';
     };
     for(const e of entries) e.check.addEventListener('change',()=>{updateCount();updateReplaceState();});
     selectNew.onclick=()=>{for(const e of entries)e.check.checked=(e.kind==='new');updateCount();updateReplaceState();};
@@ -234,15 +213,6 @@
     // cochable, aucun statut coloré. Si le chargement des paquets échoue, l'import
     // reste impossible au lieu de laisser croire à une sélection valide.
     setPending(); updateCount();
-    const updateTag=()=>{
-      const raw=tagInput.value.trim(), tag=lotTag();
-      tagHint.textContent=!raw?'Ajouté à toutes les cartes importées, en plus de leurs propres tags.'
-        :tag?(tag===raw?`Ajouté à toutes les cartes : ${tag}`:`Sera enregistré dans Anki sous la forme : ${tag}`)
-        :'Ce tag ne contient aucun caractère utilisable : il sera ignoré.';
-      updateRecap();
-    };
-    tagInput.addEventListener('input',updateTag);
-    tagInput.addEventListener('change',()=>{chrome.storage.local.set({[TAG_KEY]:lotTag()}).catch(()=>{});});
     let closed=false;
     // La fenêtre est « vivante » tant qu'elle n'a pas été fermée et qu'elle est
     // encore attachée au document : aucune analyse ne doit se poursuivre ni
@@ -254,7 +224,7 @@
       analyze.disabled=false;
       if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
       for(const e of entries){e.replaceRow.replaceChildren();e.replace=null;}
-      replaceBtn.disabled=true; replaceBtn.textContent='Remplacer les notes existantes';
+      replaceBtn.disabled=true; replaceBtn.hidden=true; replaceBtn.textContent='Remplacer les notes existantes';
       msg.textContent=why||'Cartes modifiées : relancer la comparaison avant import.';
       for(const e of entries)e.notice.textContent='Non vérifié depuis la dernière modification.';
       setPending();
@@ -287,25 +257,28 @@
       const changes=[];
       if(!sameText(m.frontFull??m.front,wanted[0]))changes.push({label:e.card.type==='cloze'?'Texte':'Question',from:m.front||'(vide)',to:wanted[0]});
       if(!sameText(m.secondFull??m.back,wanted[1]))changes.push({label:e.card.type==='cloze'?'Précisions':'Réponse',from:m.back||'(vide)',to:wanted[1]});
+      // Rien à mettre à jour : rien n'est proposé (pas de bloc vide ni de case grisée).
+      if(!changes.length)return;
       const row=el('div','ankibridge-replacebox');
       const label=el('label','ankibridge-replacepick');
       const box=el('input'); box.type='checkbox'; box.className='ankibridge-replacebox-input';
-      box.setAttribute('aria-label',`Remplacer la note ${m.id}`);
-      label.append(box, document.createTextNode(` Remplacer la note #${m.id} — paquet « ${deckLabel(m.deck)} » (modèle ${m.model})`));
+      box.setAttribute('aria-label',`Mettre à jour la note ${m.id} dans Anki`);
+      label.append(box, document.createTextNode(' Mettre à jour la note dans Anki avec cette version'));
       row.append(label);
-      row.append(el('p','ankibridge-replacehint','Identifiant, paquet, planning de révision et tags sont conservés ; seuls les champs ci-dessous sont réécrits.'));
-      if(!changes.length){
-        box.disabled=true;
-        row.append(el('p','ankibridge-diff','Aucun champ ne diffère : rien à remplacer pour cette carte.'));
-      } else {
-        const diff=el('div','ankibridge-diff');
-        diff.append(el('p','ankibridge-difftitle','Aperçu avant → après'));
-        for(const c of changes){
-          diff.append(el('p','ankibridge-diffline',`${c.label} — avant : ${c.from}`));
-          diff.append(el('p','ankibridge-diffline after',`${c.label} — après : ${c.to}`));
-        }
-        row.append(diff);
+      // Le détail reste replié : il n'intéresse que si l'on hésite.
+      const more=el('details','ankibridge-diffdetails');
+      more.append(el('summary','','Voir les changements'));
+      const diff=el('div','ankibridge-diff');
+      for(const c of changes){
+        diff.append(el('p','ankibridge-diffline',`${c.label} dans Anki : ${c.from}`));
+        const after=el('div','ankibridge-diffline after');
+        after.append(el('span','',`${c.label} après mise à jour : `));
+        const shown=el('span','ankibridge-previewbody'); renderInto(shown,c.to,document); after.append(shown);
+        diff.append(after);
       }
+      diff.append(el('p','ankibridge-replacehint',`Note #${m.id}, paquet « ${deckLabel(m.deck)} » : son planning de révision, son paquet et ses tags sont conservés.`));
+      more.append(diff);
+      row.append(more);
       box.addEventListener('change',updateReplaceState);
       e.replaceRow.append(row);
       e.replace=box;
@@ -324,7 +297,7 @@
         if(!alive()||token!==analysisSeq||atStart!==revision)return;
         verified=true;
         lastReport=report;
-        let exact=0, similar=0, replaceable=0;
+        let exact=0, similar=0;
         report.items.forEach((item,i)=>{
           const e=entries[i];
           e.item=item; e.kind=item.kind;
@@ -336,28 +309,38 @@
           e.notice.className='ankibridge-notice '+item.kind;
           if(item.kind==='exact'){
             e.check.checked=false; exact++;
-            e.notice.textContent='Doublon exact déjà présent dans la collection (ou répété dans ce lot) : ignoré à l\'import.';
-            if(item.duplicates.length)e.notice.append(duplicateBlock(item));
-            e.notice.append(el('p','ankibridge-dupnote',item.note));
+            const where=item.duplicates[0]?.deck?` (paquet « ${deckLabel(item.duplicates[0].deck)} »)`:'';
+            e.notice.textContent=item.blocked==='interne-au-lot'
+              ?'Répétée dans ce lot : une seule copie sera importée.'
+              :`Déjà dans Anki${where} : ne sera pas importée en double.`;
+            if(item.duplicates.length||item.note){
+              const more=el('details','ankibridge-dupdetails');
+              more.append(el('summary','',item.duplicates.length>1?`Voir les ${item.duplicates.length} notes identiques`:'Voir la note existante'));
+              if(item.duplicates.length)more.append(duplicateBlock(item));
+              more.append(el('p','ankibridge-dupnote',item.note));
+              e.notice.append(more);
+            }
           } else if(item.kind==='similar'){
             similar++;
             e.check.checked=false; // Décochée par précaution, réactivable explicitement.
-            e.notice.textContent='Formulation proche détectée. Non cochée par précaution : à vérifier avant de la réactiver.';
-            e.notice.append(duplicateBlock(item));
+            e.notice.textContent='Ressemble à une carte déjà dans Anki : non cochée par précaution. Coche-la si elle apporte autre chose.';
+            const more=el('details','ankibridge-dupdetails');
+            more.append(el('summary','','Voir la carte proche'));
+            more.append(duplicateBlock(item));
+            e.notice.append(more);
           } else {
             // Carte neuve : pré-sélectionnée pour l'import, comme avant l'analyse.
             e.check.checked=true;
-            e.notice.textContent='Aucun doublon détecté dans la zone analysée.';
+            e.notice.textContent='';   // rien à signaler : pas de message
           }
           buildReplaceRow(e,item);
-          if(item.replaceable)replaceable++;
         });
         updateCount();
         updateReplaceState();
-        msg.textContent=`${report.totalExisting} notes existantes (${report.scanned} analysées) • ${exact} doublon(s) certain(s), ${similar} ressemblance(s) à relire`+
-          (replaceable?`, ${replaceable} remplacement(s) possible(s)`:'')+'.'+
-          (report.partial?' Attention : analyse de similarité PARTIELLE, collection trop volumineuse. Les doublons exacts restent vérifiés globalement.':'')+
-          ' Une ressemblance de formulation ne garantit pas que les informations sont identiques.';
+        // Un résumé court : le détail est sur chaque carte.
+        const fresh=report.items.length-exact-similar;
+        msg.textContent=[fresh?`${fresh} nouvelle${fresh>1?'s':''}`:'',similar?`${similar} à vérifier`:'',exact?`${exact} déjà dans Anki`:'']
+          .filter(Boolean).join(' · ')+(report.partial?' · comparaison partielle (collection très grande)':'');
         save.disabled=false;
       } catch(e){
         if(!alive()||token!==analysisSeq)return;
@@ -398,9 +381,8 @@
       onDeckSelected(target, r.created
         ?`Paquet « ${deckLabel(target)} » créé dans Anki. Comparaison en cours…`
         :`Le paquet « ${deckLabel(target)} » existait déjà : il est sélectionné. Comparaison en cours…`);
-      updateRecap();
     };
-    foot.append(recap,msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
+    foot.append(msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
     // Fermer la fenêtre abandonne l'analyse en vol : sans cela, une comparaison
     // lancée juste avant la fermeture continuerait de coûter des appels Anki.
     const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);theme.stop();overlay.remove();};
@@ -412,12 +394,10 @@
       if(!alive())return;                 // fenêtre fermée pendant le chargement des paquets
       deckNames=Array.isArray(names)?names:[];
       picker.setNames(deckNames);
-      const saved=await chrome.storage.local.get(['deck',TAG_KEY]);
+      const saved=await chrome.storage.local.get('deck');
       if(!alive())return;
-      if(typeof saved?.[TAG_KEY]==='string'&&!tagInput.value){tagInput.value=saved[TAG_KEY];updateTag();}
       if(!names.length)throw new Error('Aucun paquet Anki disponible : tape un nom dans « Paquet Anki » pour en créer un.');
       picker.setValue(names.includes(saved.deck)?saved.deck:names[0]);
-      updateRecap();
       lastAnalyzedDeck=picker.value;
       analyze.disabled=false;
       runAnalysis();            // comparaison automatique dès l'ouverture de la fenêtre
@@ -491,10 +471,9 @@
         AnkiCards.toCards({cards:selected});
         save.disabled=true; analyze.disabled=true; replaceBtn.disabled=true;
         msg.textContent=`Import en cours : ${selected.length} carte(s)...`;
-        const tag=lotTag();
-        await chrome.storage.local.set({deck:picker.value,[TAG_KEY]:tag});
-        const r=await api('IMPORT',{deck:picker.value,cards:selected,batchTag:tag});
-        msg.textContent=`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).`+(tag?` Tag du lot : ${tag}.`:'')+
+        await chrome.storage.local.set({deck:picker.value});
+        const r=await api('IMPORT',{deck:picker.value,cards:selected});
+        msg.textContent=`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).`+
           (r.errors.length ? `\n${r.errors.join('\n')}` : ' Révise ensuite dans Anki.');
         save.textContent='Import terminé';
         // Ne jamais réimporter accidentellement la même sélection après un premier lot.

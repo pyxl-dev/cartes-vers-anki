@@ -18,16 +18,15 @@
      - Seule une sélection réelle (clic ou Entrée) appelle onChoose : l'analyse
        ne se relance jamais à chaque caractère. Échap ou un clic ailleurs
        réaffichent le paquet choisi.
-     - Création : bouton « + Nouveau paquet » toujours visible, ou dernière option
-       de la liste quand la recherche ne désigne exactement aucun paquet. Un petit
-       formulaire s'ouvre sous le champ : il montre ce qui sera créé (et si le
+     - Création : dernière option de la liste quand le nom tapé ne désigne
+       exactement aucun paquet. Un petit formulaire s'ouvre sous le champ : il montre ce qui sera créé (et si le
        parent le sera aussi) ; rien n'est écrit avant le clic sur « Créer le
        paquet ». onCreate(nom) est appelé à ce moment et peut échouer : l'erreur
        s'affiche dans le formulaire. */
   function createDeckPicker(names, onChoose, {onCreate = null} = {}) {
     let pool = Array.isArray(names) ? names : [];
     const root = el('div','ankibridge-combo');
-    const line = el('div','ankibridge-comborow');
+
     const input = el('input','ankibridge-deckinput');
     input.type = 'text';
     input.setAttribute('role','combobox');
@@ -36,17 +35,6 @@
     input.setAttribute('aria-label','Rechercher un paquet Anki');
     input.setAttribute('autocomplete','off');
     input.setAttribute('placeholder','Tape un mot du paquet…');
-    const toggle = el('button','ankibridge-decktoggle','▾');
-    toggle.type = 'button';
-    toggle.setAttribute('aria-label','Afficher tous les paquets');
-    toggle.setAttribute('tabindex','-1');
-    line.append(input, toggle);
-    let newBtn = null;
-    if (onCreate) {
-      newBtn = el('button','ankibridge-newdeckbtn','+ Nouveau paquet');
-      newBtn.type = 'button';
-      line.append(newBtn);
-    }
     const list = el('ul','ankibridge-decklist');
     list.setAttribute('role','listbox');
     list.hidden = true;
@@ -67,7 +55,7 @@
     const panelActions = el('div','ankibridge-newdeckactions');
     panelActions.append(okBtn, cancelBtn);
     panel.append(nameLabel, info, panelActions);
-    root.append(line, list, panel);
+    root.append(input, list, panel);
     let current = '';
     let shown = [];      // options navigables : {kind:'deck'|'create', name}
     let active = -1;
@@ -215,10 +203,6 @@
     });
     okBtn.onclick = confirmPanel;
     cancelBtn.onclick = () => { closePanel(); };
-    if (newBtn) newBtn.onclick = () => {
-      const typed = input.value === deckLabel(current) ? '' : input.value;
-      if (panel.hidden) openPanel(typed); else closePanel();
-    };
     function pick(entry) {
       if (entry.kind === 'create') { openPanel(entry.name); return; }
       choose(entry.name);
@@ -227,11 +211,13 @@
     // Au clic / à l'entrée dans le champ : tout le texte est sélectionné, la
     // frappe remplace donc le nom affiché ; la liste complète s'ouvre.
     input.addEventListener('focus', () => { input.select?.(); if (list.hidden) open(''); });
+    input.addEventListener('mousedown', () => { if (list.hidden && document.activeElement === input) open(''); });
+    // Champ déjà actif (après Échap, par exemple) : un clic resélectionne le nom du
+    // paquet choisi, pour que la frappe le remplace au lieu de s'y ajouter.
+    input.addEventListener('click', () => { if (input.value === deckLabel(current)) input.select?.(); });
     input.addEventListener('blur', () => setTimeout(() => {
       if (!root.contains?.(document.activeElement)) close({restore: true});
     }, 150));
-    toggle.addEventListener('mousedown', e => e.preventDefault());
-    toggle.onclick = () => { if (list.hidden) { input.focus(); open(''); } else close({restore: true}); };
     input.addEventListener('keydown', e => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
