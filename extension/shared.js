@@ -369,107 +369,129 @@
     return target;
   }
 
-  /* Éditeur visuel d'un texte à trous, en DOM sûr. Le texte est affiché mis en
-     forme ; chaque morceau porte data-o (sa position dans la source) pour qu'une
-     sélection puisse devenir un trou. Chaque trou de premier niveau devient :
-     numéro de carte + case contenant la réponse attendue + bouton « retirer ».
-     Les actions sont confiées à l'appelant (hooks.onAnswer / hooks.onRemove). */
-  function editorNodes(doc, parent, nodes, hooks, counter) {
-    for (const n of nodes) {
-      if (n.t === 'text' || n.t === 'code') {
-        const host = n.t === 'code' ? doc.createElement('code') : parent;
-        let at = n.o;
-        n.v.split('\n').forEach((part, k) => {
-          if (k) { host.append(doc.createElement('br')); at++; }
-          if (!part) return;
-          const span = doc.createElement('span');
-          span.className = 'ankibridge-src';
-          span.setAttribute('data-o', String(at));
-          span.textContent = part;
-          host.append(span);
-          at += part.length;
-        });
-        if (host !== parent) parent.append(host);
-      } else if (n.t === 'cloze') {
-        const k = counter.k++;
-        const hole = doc.createElement('span');
-        hole.className = 'ankibridge-hole';
-        const num = doc.createElement('span');
-        num.className = 'ankibridge-holenum';
-        num.textContent = String(n.n);
-        num.setAttribute('title', `Carte ${n.n} : ce trou est caché dans la carte n° ${n.n}`);
-        const input = doc.createElement('input');
-        input.type = 'text';
-        input.className = 'ankibridge-holeinput';
-        const {value, wrap} = splitAnswer(hooks.source.slice(n.cStart, n.cEnd));
-        input.value = value;
-        if (wrap === '**') input.classList.add('bold');
-        if (wrap === '*') input.classList.add('italic');
-        input.setAttribute('size', String(Math.min(60, Math.max(4, value.length + 1))));
-        input.setAttribute('aria-label', `Réponse attendue du trou ${k + 1} (carte ${n.n})`);
-        input.setAttribute('autocomplete', 'off');
-        input.setAttribute('spellcheck', 'false');
-        if (/\{\{/.test(value)) {
-          input.disabled = true;
-          input.setAttribute('title', 'Trou imbriqué : utilise « Modifier le texte ».');
-        }
-        input.addEventListener('input', () => {
-          input.setAttribute('size', String(Math.min(60, Math.max(4, input.value.length + 1))));
-          hooks.onAnswer(k, input.value, wrap, input);
-        });
-        hole.append(num, input);
-        if (n.hint !== null) {
-          const hint = doc.createElement('span');
-          hint.className = 'ankibridge-clozehint';
-          hint.textContent = ` indice : ${n.hint}`;
-          hole.append(hint);
-        }
-        const remove = doc.createElement('button');
-        remove.type = 'button';
-        remove.className = 'ankibridge-holeremove';
-        remove.textContent = '×';
-        remove.setAttribute('aria-label', `Retirer le trou ${k + 1} (le texte reste)`);
-        remove.setAttribute('title', 'Retirer ce trou (le texte reste visible)');
-        remove.addEventListener('mousedown', e => e.preventDefault());
-        remove.onclick = () => hooks.onRemove(k);
-        hole.append(remove);
-        parent.append(hole);
-      } else {
-        const el = doc.createElement(TAG[n.t]);
-        editorNodes(doc, el, n.c, hooks, counter);
-        parent.append(el);
-      }
-    }
+  /* --- Éditeur visuel → texte de carte ---------------------------------------
+     Convertit le contenu d'un éditeur contenteditable (ce que Chrome produit quand
+     on tape, appuie sur Entrée, applique gras / italique / exposant / indice /
+     listes) en texte de carte. Seules les mises en forme autorisées sont gardées ;
+     tout le reste (styles, liens, images collées…) devient du texte simple ou
+     disparaît. Un trou affiché comme une case (.ankibridge-hole) est recopié tel
+     quel depuis son attribut data-src : il n'est jamais reconstruit à partir du DOM. */
+  const DOM_BLOCK = new Set(['div', 'p', 'li', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'section', 'article']);
+  const STYLE_OF = {b: 'b', strong: 'b', i: 'i', em: 'i', sup: 'sup', sub: 'sub', code: 'code'};
+  const MARK = {b: '**', i: '*', sup: '^', sub: '~', code: '`'};
+  const ORDER = ['b', 'i', 'sup', 'sub', 'code'];
+  const tagOf = n => String(n && n.tagName || '').toLowerCase();
+  // Un <br> en dernière position d'un bloc n'est qu'un « bouche-trou » de Chrome.
+  function placeholderBr(n) {
+    const parent = n.parentElement || n.parent;
+    if (!parent || !(DOM_BLOCK.has(tagOf(parent)) || parent.getAttribute?.('contenteditable') === 'true')) return false;
+    const kids = Array.from(parent.childNodes || []);
+    const after = kids.slice(kids.indexOf(n) + 1);
+    return after.every(k => k.nodeType === 3 ? !String(k.textContent || '') : false);
   }
-  function renderClozeEditor(target, text, doc, hooks) {
-    const source = String(text ?? '');
-    const all = {...hooks, source};
-    const counter = {k: 0};
-    target.replaceChildren();
-    parse(source).forEach(b => {
-      if (b.t === 'lines') {
-        b.lines.forEach((line, k) => {
-          if (k) target.append(doc.createElement('br'));
-          editorNodes(doc, target, line, all, counter);
-        });
+  // Une ligne = suite de morceaux {t: texte, s: styles} ou {raw: trou}, plus un préfixe de liste.
+  function renderLine(line) {
+    let out = '';
+    const open = [];
+    const closeAll = upto => {
+      // Dans du code, les espaces de bord font partie du contenu : on ferme le code d'abord.
+      if (open.length > upto && open[open.length - 1] === 'code') out += MARK[open.pop()];
+      const trail = out.match(/[ \t]*$/)[0];
+      out = out.slice(0, out.length - trail.length);
+      while (open.length > upto) out += MARK[open.pop()];
+      out += trail;
+    };
+    let lastCode = null;
+    for (const run of line.runs) {
+      const want = run.s;
+      // Deux blocs de code accolés restent deux blocs distincts.
+      if (open[open.length - 1] === 'code' && run.code !== lastCode) out += MARK[open.pop()];
+      lastCode = run.code ?? null;
+      let keep = 0;
+      while (keep < open.length && want.has(open[keep])) keep++;
+      if (keep < open.length) closeAll(keep);
+      let text = run.raw !== undefined ? run.raw : run.t;
+      const missing = ORDER.filter(st => want.has(st) && !open.includes(st));
+      if (missing.length && run.raw === undefined && !want.has('code')) {
+        const lead = text.match(/^[ \t]*/)[0];
+        out += lead; text = text.slice(lead.length);
+        if (!text) continue;
+      }
+      for (const st of missing) { out += MARK[st]; open.push(st); }
+      out += text;
+    }
+    closeAll(0);
+    return line.prefix + out;
+  }
+  function domToMarkdown(root) {
+    const lines = [{prefix: '', runs: []}];
+    let codeSeq = 0;
+    const cur = () => lines[lines.length - 1];
+    const empty = () => !cur().runs.some(r => (r.raw !== undefined ? r.raw : r.t).length);
+    const newLine = () => lines.push({prefix: '', runs: []});
+    const ensureFresh = () => { if (!empty()) newLine(); };
+    // Un exposant / indice ne peut pas contenir d'espace (^a b^ resterait du texte
+    // brut) : chaque mot est mis en exposant, les espaces restent normaux.
+    const push = (t, s) => {
+      if (!t) return;
+      if ((s.has('sup') || s.has('sub')) && /\s/.test(t)) {
+        const plainSet = new Set([...s].filter(x => x !== 'sup' && x !== 'sub'));
+        for (const piece of t.split(/(\s+)/)) if (piece) cur().runs.push({t: piece, s: /^\s+$/.test(piece) ? plainSet : s});
         return;
       }
-      const list = doc.createElement(b.t);
-      if (b.t === 'ol' && b.start !== 1) list.setAttribute('start', String(b.start));
-      for (const item of b.items) {
-        const li = doc.createElement('li');
-        editorNodes(doc, li, item, all, counter);
-        list.append(li);
+      cur().runs.push({t, s});
+    };
+    const walk = (node, styles, list) => {
+      if (node.nodeType === 3) {
+        const text = String(node.textContent || '').replace(/ /g, ' ');
+        text.split('\n').forEach((part, k) => { if (k) newLine(); push(part, styles); });
+        return;
       }
-      target.append(list);
-    });
-    return counter.k;
+      if (node.nodeType !== 1) return;
+      const tag = tagOf(node);
+      if (node.classList?.contains('ankibridge-hole')) { cur().runs.push({raw: node.getAttribute('data-src') || '', s: styles}); return; }
+      if (tag === 'br') { if (!placeholderBr(node)) newLine(); return; }
+      if (['input', 'button', 'script', 'style', 'img', 'svg', 'iframe', 'template'].includes(tag)) return;
+      const kids = Array.from(node.childNodes || []);
+      if (tag === 'ul' || tag === 'ol') {
+        let n = Number(node.getAttribute?.('start')) || 1;
+        // Deux listes qui se suivent restent deux listes : une ligne vide les sépare.
+        if (empty() && lines.length > 1 && lines[lines.length - 2].prefix) newLine();
+        for (const k of kids) {
+          if (tagOf(k) === 'li') {
+            if (!empty() || cur().prefix) newLine();
+            cur().prefix = tag === 'ul' ? '- ' : `${n++}. `;
+            Array.from(k.childNodes || []).forEach(c => walk(c, styles, tag));
+          } else walk(k, styles, list);
+        }
+        if (empty()) cur().prefix = ''; else newLine();
+        return;
+      }
+      if (DOM_BLOCK.has(tag)) {
+        ensureFresh();
+        const before = lines.length;
+        kids.forEach(k => walk(k, styles, list));
+        // Bloc vide (<div><br></div>) : une ligne vide voulue.
+        if (lines.length === before && empty()) newLine();
+        else ensureFresh();
+        return;
+      }
+      const st = STYLE_OF[tag];
+      if (st === 'code') { const t = node.textContent || ''; if (t) cur().runs.push({t, s: new Set([...styles, 'code']), code: ++codeSeq}); return; }
+      const next = st && !styles.has(st) ? new Set([...styles, st]) : styles;
+      kids.forEach(k => walk(k, next, list));
+    };
+    Array.from(root.childNodes || []).forEach(k => walk(k, new Set(), null));
+    const text = lines.map(renderLine);
+    while (text.length && !text[text.length - 1].trim()) text.pop();
+    while (text.length && !text[0].trim()) text.shift();
+    return text.join('\n');
   }
 
   root.AnkiShared = Object.freeze({
     normText, deckLabel, validateDeckName, sameDeck, normalizeTag, MAX_DECK_NAME,
     escapeHtml, htmlToText,
-    toAnkiHtml, stripMarkdown, hasFormatting, renderInto, renderClozeEditor, parseFormatting: parse,
-    clozesOf, splitAnswer, answerError, setClozeAnswer, removeCloze, addCloze, readableTitle
+    toAnkiHtml, stripMarkdown, hasFormatting, renderInto, parseFormatting: parse,
+    clozesOf, splitAnswer, answerError, setClozeAnswer, removeCloze, addCloze, readableTitle, domToMarkdown
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

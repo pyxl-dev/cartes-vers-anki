@@ -22,7 +22,7 @@
         "shared.js",
         "cards.js",
         "picker.js",
-        "holes.js",
+        "rich.js",
         "review.js",
         "content.js"
       ],

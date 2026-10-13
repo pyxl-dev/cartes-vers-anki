@@ -6,8 +6,8 @@
    venant de ChatGPT ou d'Anki est inséré avec textContent, jamais comme du HTML. */
 (() => {
   const {deckLabel, normalizeTag, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
-  const {holeEditor} = AnkiHoles;
-  const {createDeckPicker, askConfirm, el} = AnkiPicker;
+  const {richEditor} = AnkiRich;
+  const {createDeckPicker, askConfirm, themeControl, el} = AnkiPicker;
   const TAG_KEY = 'batchTag';   // dernier tag du lot, proposé à l'ouverture suivante
   const api = (type, extra={}) => new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({type,...extra}, res => {
@@ -21,6 +21,32 @@
      changement de mise en forme n'est donc pas annoncé comme un remplacement. */
   const flat = x => String(x ?? '').replace(/\s+/g, ' ').trim();
   const sameText = (fromAnki, typed) => flat(fromAnki) === flat(stripMarkdown(typed));
+  /* Un champ de carte : éditeur visuel par défaut (barre d'outils, trous en
+     cases), « Texte brut » pour voir et modifier le texte exact avec son aperçu.
+     La zone de texte reste la source dans les deux modes ; elle s'agrandit avec
+     son contenu. */
+  function fieldBlock(name, area, rawField, clozes) {
+    const wrap = el('div','ankibridge-fieldwrap');
+    const head = el('div','ankibridge-fieldhead');
+    head.append(el('span','ankibridge-fieldname',name));
+    const toggle = el('button','ankibridge-rawtoggle','Texte brut');
+    toggle.type = 'button';
+    toggle.setAttribute('title','Voir et modifier le texte exact envoyé à Anki');
+    head.append(toggle);
+    const rich = richEditor(area, {clozes, label: name});
+    const grow = () => { area.style.height = 'auto'; area.style.height = Math.max(120, area.scrollHeight || 0) + 'px'; };
+    area.addEventListener('input', grow);
+    const setMode = raw => {
+      rich.box.hidden = raw; rawField.hidden = !raw;
+      toggle.textContent = raw ? 'Éditeur visuel' : 'Texte brut';
+      toggle.setAttribute('aria-pressed', raw ? 'true' : 'false');
+      if (raw) grow(); else rich.paint();
+    };
+    toggle.onclick = () => setMode(rawField.hidden);
+    setMode(false);
+    wrap.append(head, rich.box, rawField);
+    return wrap;
+  }
   async function showModal(cards, info = {}) {
     document.querySelector('.ankibridge-overlay')?.remove();
     const overlay = el('div','ankibridge-overlay');
@@ -29,7 +55,10 @@
     const lotLabel = info.lots > 1 ? ` (lot ${info.lot.from}–${info.lot.to})` : '';
     head.append(el('h2','',`Vérifier ${cards.length} carte${cards.length>1?'s':''} avant import${lotLabel}`));
     const close = el('button','ankibridge-close','×'); close.type='button'; close.setAttribute('aria-label','Fermer'); close.onclick=()=>closeModal();
-    head.append(close); dialog.append(head);
+    const theme = themeControl(overlay);
+    const headTools = el('div','ankibridge-headtools');
+    headTools.append(theme.button, close);
+    head.append(headTools); dialog.append(head);
     const main = el('div','ankibridge-main');
     const control = el('div','ankibridge-control');
     control.append(el('span','ankibridge-decklabel','Paquet Anki :'));
@@ -110,9 +139,11 @@
       summary.append(title); details.append(summary);
       const notice=el('div','ankibridge-notice','Comparaison avec Anki en cours…');
       details.append(notice);
-      const firstLabel=el('label','',card.type==='cloze'?'Texte brut (un trou s’écrit {{c1::réponse}})':'Question');
+      const cloze=card.type==='cloze';
+      const firstName=cloze?'Texte à trous':'Question', secondName=cloze?'Précisions facultatives':'Réponse';
+      const firstLabel=el('label','',cloze?'Texte brut (un trou s’écrit {{c1::réponse}}, le gras **ainsi**)':'Texte brut (le gras s’écrit **ainsi**)');
       const first=el('textarea'); first.value=card.type==='cloze'?card.text:card.front; firstLabel.append(first);
-      const secondLabel=el('label','',card.type==='cloze'?'Précisions facultatives':'Réponse');
+      const secondLabel=el('label','','Texte brut (le gras s’écrit **ainsi**)');
       const second=el('textarea'); second.value=card.type==='cloze'?card.extra:card.back; secondLabel.append(second);
       // Aperçu mis en forme à côté du texte modifiable, reconstruit à chaque frappe.
       const withPreview=(label,area)=>{
@@ -126,10 +157,8 @@
         field.append(label,preview);
         return field;
       };
-      const firstField=withPreview(firstLabel,first);
-      // Texte à trous : édition visuelle par défaut, texte brut sur demande.
-      if(card.type==='cloze')details.append(holeEditor(first,firstField));
-      details.append(firstField,withPreview(secondLabel,second));
+      details.append(fieldBlock(firstName,first,withPreview(firstLabel,first),cloze),
+        fieldBlock(secondName,second,withPreview(secondLabel,second),false));
       // Bloc « remplacer » : vide tant qu'aucune note certaine n'est identifiée.
       const replaceRow=el('div','ankibridge-replacerow'); details.append(replaceRow);
       row.append(check, dot, status, details);
@@ -348,51 +377,33 @@
       debounceTimer=setTimeout(runAnalysis,250);
     };
     let lastAnalyzedDeck='';
-    /* Création d'un paquet proposée par le sélecteur : confirmation dans la page,
-       puis CREATE_DECK. Annuler n'écrit rien. Après création, la liste est
-       rechargée, le paquet sélectionné et la comparaison relancée. */
+    /* Création d'un paquet : le formulaire du sélecteur montre ce qui sera créé
+       (parent compris) et n'appelle onCreate qu'au clic sur « Créer le paquet » ;
+       c'est la confirmation explicite. Une erreur remonte dans ce formulaire.
+       Après création, la liste est rechargée, le paquet sélectionné et la
+       comparaison relancée. */
     let deckNames=[];
-    let creating=false;
     const onCreateDeck=async name=>{
-      if(!alive()||creating)return;
+      if(!alive())return;
       const check=validateDeckName(name);
-      if(!check.ok){msg.textContent=`Création impossible : ${check.error}`;return;}
-      const label=deckLabel(check.name);
-      const lines=[`Le paquet « ${label} » va être créé dans Anki.`];
-      const parts=check.name.split('::');
-      if(parts.length>1){
-        const parent=parts.slice(0,-1).join('::');
-        lines.push(deckNames.some(d=>sameDeck(d,parent))
-          ?`Il sera rangé dans le paquet existant « ${deckLabel(parent)} ».`
-          :`Le paquet parent « ${deckLabel(parent)} » n’existe pas encore : il sera créé aussi.`);
-      }
-      lines.push('Aucune carte ni aucun paquet existant n’est modifié. Un paquet vide peut ensuite être renommé ou supprimé dans Anki.');
-      creating=true;
-      try{
-        const ok=await askConfirm(dialog,`Créer le paquet « ${label} » ?`,lines,'Créer le paquet');
-        if(!alive())return;
-        // Annuler : le champ réaffiche le paquet réellement sélectionné.
-        if(!ok){picker.setValue(picker.value);msg.textContent='Création annulée : aucun paquet créé.';return;}
-        msg.textContent=`Création du paquet « ${label} »…`;
-        const r=await api('CREATE_DECK',{deck:check.name});
-        const names=await api('DECKS');
-        if(!alive())return;
-        deckNames=Array.isArray(names)?names:[];
-        picker.setNames(deckNames);
-        const target=deckNames.find(d=>sameDeck(d,r.deck))||r.deck;
-        picker.setValue(target);
-        analyze.disabled=false;
-        onDeckSelected(target, r.created
-          ?`Paquet « ${deckLabel(target)} » créé dans Anki. Comparaison en cours…`
-          :`Le paquet « ${deckLabel(target)} » existait déjà : il est sélectionné. Comparaison en cours…`);
-        updateRecap();
-      }catch(e){if(alive()){picker.setValue(picker.value);msg.textContent=`Création impossible : ${e.message}`;}}
-      finally{creating=false;}
+      if(!check.ok)throw new Error(check.error);
+      const r=await api('CREATE_DECK',{deck:check.name});
+      const names=await api('DECKS');
+      if(!alive())return;
+      deckNames=Array.isArray(names)?names:[];
+      picker.setNames(deckNames);
+      const target=deckNames.find(d=>sameDeck(d,r.deck))||r.deck;
+      picker.setValue(target);
+      analyze.disabled=false;
+      onDeckSelected(target, r.created
+        ?`Paquet « ${deckLabel(target)} » créé dans Anki. Comparaison en cours…`
+        :`Le paquet « ${deckLabel(target)} » existait déjà : il est sélectionné. Comparaison en cours…`);
+      updateRecap();
     };
     foot.append(recap,msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
     // Fermer la fenêtre abandonne l'analyse en vol : sans cela, une comparaison
     // lancée juste avant la fermeture continuerait de coûter des appels Anki.
-    const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);overlay.remove();};
+    const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);theme.stop();overlay.remove();};
     overlay.addEventListener('click',e=>{if(e.target===overlay) closeModal();});
     const esc=(e)=>{if(e.key==='Escape'){closeModal();document.removeEventListener('keydown',esc);}};
     document.addEventListener('keydown',esc);

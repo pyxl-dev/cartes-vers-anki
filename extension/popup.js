@@ -41,6 +41,21 @@ const clearConnFeedback=()=>{
 // la vue normale. Le message d'action reste court et actionnable.
 const setTech=msg=>{ const el=$('techDetail'); if(el)el.textContent = msg ? `Détail technique : ${msg}` : ''; };
 
+/* --- Apparence : automatique (système), clair ou sombre -------------------
+   Même réglage que le bouton « Thème » de la fenêtre de vérification. */
+const THEME_KEY='theme';
+const applyTheme=theme=>{
+  const value=['light','dark'].includes(theme)?theme:'auto';
+  if(value==='auto')document.documentElement?.removeAttribute('data-theme');
+  else document.documentElement?.setAttribute('data-theme',value);
+  if($('theme'))$('theme').value=value;
+};
+chrome.storage.local.get(THEME_KEY).then(saved=>applyTheme(saved?.[THEME_KEY])).catch(()=>applyTheme('auto'));
+$('theme')?.addEventListener('change',()=>{
+  applyTheme($('theme').value);
+  chrome.storage.local.set({[THEME_KEY]:$('theme').value}).catch(()=>{});
+});
+
 let portIsManual=false;
 async function loadPort() {
   const info=await api('PORT_INFO');

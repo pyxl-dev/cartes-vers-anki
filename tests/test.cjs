@@ -1418,42 +1418,78 @@ async function contentTests() {
     assert.equal(rows[1].querySelector('.ankibridge-replacebox-input').disabled, false, 'vrai changement de texte : remplacement proposé');
   });
 
-  /* --- 1.6.0 : texte à trous visuel --- */
+  /* --- 1.6.0 : éditeur visuel (WYSIWYG) et trous en cases --- */
   const HOLES = JSON.stringify({ cards: [
-    { type: 'cloze', text: 'Le processus DHCP suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé {{c2::DORA::acronyme}}', extra: 'Explication.' },
-    { type: 'basic', front: 'Q', back: 'R' }
+    { type: 'cloze', text: 'Le **processus** DHCP suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé {{c2::DORA::acronyme}}', extra: 'Explication.' },
+    { type: 'basic', front: 'Q', back: 'Réponse :\n- un\n- **deux**' }
   ] });
   const items2 = [anItem('new'), anItem('new')];
-  await ta('trous : affichés comme des cases avec la réponse, sans syntaxe {{c1::…}}', async () => {
-    const ov = await openModal(respondOk(items2), HOLES);
-    const row = rowsOf(ov)[0];
-    const inputs = row.querySelectorAll('.ankibridge-holeinput');
-    assert.deepEqual(inputs.map(x => x.value), ['Discover → Offer → Request → ACK', 'DORA']);
-    assert.ok(inputs[0].classList.contains('bold'), 'gras englobant montré par le style, sans **');
-    assert.deepEqual(row.querySelectorAll('.ankibridge-holenum').map(x => x.textContent), ['1', '2']);
-    const editor = row.querySelector('.ankibridge-holeeditor');
-    assert.ok(!/\{\{|\}\}|\*\*/.test(editor.textContent), 'aucune syntaxe visible : ' + editor.textContent);
-    assert.match(editor.textContent, /indice : acronyme/);
-    assert.equal(row.querySelector('.ankibridge-holeeditor ul li') !== null, true, 'mise en forme conservée autour des trous');
-    assert.equal(row.querySelectorAll('.ankibridge-field')[0].hidden, true, 'texte brut masqué par défaut');
-    assert.equal(rowsOf(ov)[1].querySelector('.ankibridge-holes'), null, 'carte basique : pas d’éditeur de trous');
-    assert.equal(row.querySelector('.ankibridge-title').textContent, '1. [Texte à trous] Le processus DHCP suit [Discover → Offer → Request → ACK]. appelé [DORA]');
+  const editorsOf = row => row.querySelectorAll('.ankibridge-richedit');
+  // Sélection simulée : repères insérés comme le fait Chrome (positions = indices d'enfants).
+  const fakeSelection = (container, from, to) => ({
+    rangeCount: 1, isCollapsed: false, removeAllRanges() {},
+    getRangeAt: () => ({ startContainer: container, endContainer: container, startOffset: from, endOffset: to,
+      cloneRange() { return { toStart: true, collapse(t) { this.toStart = t; },
+        insertNode(n) { const i = this.toStart ? from : to; container.children.splice(i, 0, n); n.parent = container; } }; } })
   });
-  await ta('trous : modifier la réponse met à jour la carte, l’aperçu et invalide la comparaison', async () => {
+  await ta('éditeur : chaque champ s’édite mis en forme, sans syntaxe visible', async () => {
+    const ov = await openModal(respondOk(items2), HOLES);
+    const [cloze, basic] = rowsOf(ov);
+    const ed = editorsOf(cloze)[0];
+    assert.equal(ed.getAttribute('contenteditable'), 'true');
+    assert.equal(ed.querySelector('b').textContent, 'processus', 'gras affiché en gras');
+    assert.ok(!/\{\{|\}\}|\*\*/.test(ed.textContent), 'aucune syntaxe visible : ' + ed.textContent);
+    assert.deepEqual(cloze.querySelectorAll('.ankibridge-holeinput').map(x => x.value), ['Discover → Offer → Request → ACK', 'DORA']);
+    assert.ok(cloze.querySelectorAll('.ankibridge-holeinput')[0].classList.contains('bold'));
+    assert.equal(cloze.querySelectorAll('.ankibridge-hole')[0].getAttribute('contenteditable'), 'false', 'trou protégé');
+    assert.match(ed.textContent, /indice : acronyme/);
+    assert.equal(editorsOf(basic)[1].querySelectorAll('ul li').length, 2, 'liste affichée en liste');
+    assert.equal(basic.querySelector('.ankibridge-holeadd'), null, 'carte basique : pas de bouton « trou »');
+    assert.ok(cloze.querySelector('.ankibridge-holeadd'));
+    assert.deepEqual(basic.querySelectorAll('.ankibridge-toolbar')[0].querySelectorAll('.ankibridge-tool').map(b => b.getAttribute('data-cmd')),
+      ['bold', 'italic', 'superscript', 'subscript', 'insertUnorderedList', 'insertOrderedList', 'removeFormat']);
+    assert.ok(cloze.querySelectorAll('.ankibridge-field').every(f => f.hidden), 'texte brut masqué par défaut');
+    assert.equal(cloze.querySelector('.ankibridge-title').textContent, '1. [Texte à trous] Le processus DHCP suit [Discover → Offer → Request → ACK]. appelé [DORA]');
+  });
+  await ta('éditeur : une modification à la main devient le texte de la carte', async () => {
+    const ov = await openModal(respondOk(items2), HOLES);
+    const basic = rowsOf(ov)[1];
+    const ed = editorsOf(basic)[1];
+    // Ce que Chrome produit après : texte, Entrée, Entrée, liste, « Fin » en italique.
+    ed.replaceChildren(h('div', {}, 'Réponse ', h('b', {}, 'claire')), h('div', {}, h('br')), h('ul', {}, h('li', {}, 'un'), h('li', {}, h('sup', {}, '2'))), h('div', {}, h('i', {}, 'Fin')));
+    ed.dispatchEvent(new Event('input', { bubbles: true }));
+    const area = basic.querySelectorAll('textarea')[1];
+    assert.equal(area.value, 'Réponse **claire**\n\n- un\n- ^2^\n*Fin*');
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/, 'comparaison à relancer');
+  });
+  await ta('éditeur : barre d’outils (gras, listes…) et collage en texte simple', async () => {
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, HOLES))] }, respondOk(items2));
+    const calls = [];
+    hh.ctx.document.execCommand = (cmd, _ui, value) => { calls.push([cmd, value]); return true; };
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const row = hh.root.querySelectorAll('.ankibridge-row')[1];
+    row.querySelectorAll('.ankibridge-tool')[0].onclick();
+    assert.deepEqual(plain(calls), [['styleWithCSS', false], ['bold', null]]);
+    calls.length = 0;
+    editorsOf(row)[0].dispatchEvent({ type: 'paste', clipboardData: { getData: () => 'texte <b>collé</b>' } });
+    assert.deepEqual(plain(calls), [['insertText', 'texte <b>collé</b>']], 'collé en texte simple, jamais en HTML');
+  });
+  await ta('trous : modifier la réponse met à jour la carte ; réponse invalide refusée', async () => {
     const ov = await openModal(respondOk(items2), HOLES);
     const row = rowsOf(ov)[0];
     const input = row.querySelectorAll('.ankibridge-holeinput')[0];
-    input.value = 'DORA'; input.dispatchEvent(new Event('input', { bubbles: true }));
     const area = row.querySelectorAll('textarea')[0];
-    assert.equal(area.value, 'Le processus DHCP suit {{c1::**DORA**}}.\n- appelé {{c2::DORA::acronyme}}', 'gras et indice conservés');
+    input.value = 'DORA'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(area.value, 'Le **processus** DHCP suit {{c1::**DORA**}}.\n- appelé {{c2::DORA::acronyme}}', 'gras et indice conservés');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/);
-    assert.equal(row.querySelectorAll('.ankibridge-previewbody .ankibridge-cloze b')[0].textContent, 'DORA', 'aperçu à jour');
     input.value = 'a}}b'; input.dispatchEvent(new Event('input', { bubbles: true }));
-    assert.ok(input.classList.contains('invalid'), 'réponse refusée signalée');
+    assert.ok(input.classList.contains('invalid'));
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /ni « \}\} »/);
-    assert.equal(area.value, 'Le processus DHCP suit {{c1::**DORA**}}.\n- appelé {{c2::DORA::acronyme}}', 'carte inchangée');
+    assert.equal(area.value, 'Le **processus** DHCP suit {{c1::**DORA**}}.\n- appelé {{c2::DORA::acronyme}}', 'carte inchangée');
   });
-  await ta('trous : retirer un trou garde le texte ; sélectionner un mot crée un trou', async () => {
+  await ta('trous : × retire le trou (texte gardé) ; une sélection devient un trou', async () => {
     const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, HOLES))] }, respondOk(items2));
     await new Promise(r => setTimeout(r, 700));
     hh.root.querySelector('.ankibridge-btn').click();
@@ -1461,44 +1497,46 @@ async function contentTests() {
     const row = hh.root.querySelectorAll('.ankibridge-row')[0];
     const area = row.querySelectorAll('textarea')[0];
     row.querySelectorAll('.ankibridge-holeremove')[1].onclick();
-    assert.equal(area.value, 'Le processus DHCP suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé DORA');
-    assert.equal(row.querySelectorAll('.ankibridge-holeinput').length, 1);
-    // Sélection simulée du mot « DHCP » dans le texte affiché.
-    const span = row.querySelectorAll('.ankibridge-src').find(x => x.textContent.includes('DHCP'));
-    const textNode = { nodeType: 3, parentElement: span };
-    const from = span.textContent.indexOf('DHCP');
-    hh.ctx.window.selection = { rangeCount: 1, isCollapsed: false, removeAllRanges() {},
-      getRangeAt: () => ({ startContainer: textNode, startOffset: from, endContainer: textNode, endOffset: from + 4 }) };
+    assert.equal(area.value, 'Le **processus** DHCP suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé DORA');
+    const ed = editorsOf(row)[0];
+    const boldAt = ed.children.findIndex(c => c.tagName === 'B');
+    hh.ctx.window.selection = fakeSelection(ed, boldAt, boldAt + 1);
     row.querySelector('.ankibridge-holeadd').onclick();
-    assert.equal(area.value, 'Le processus {{c2::DHCP}} suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé DORA');
-    assert.deepEqual(row.querySelectorAll('.ankibridge-holeinput').map(x => x.value), ['DHCP', 'Discover → Offer → Request → ACK']);
+    assert.equal(area.value, 'Le {{c2::**processus**}} DHCP suit {{c1::**Discover → Offer → Request → ACK**}}.\n- appelé DORA');
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /carte n° 2/);
+    assert.ok(!/|/.test(area.value + ed.textContent), 'repères retirés');
+    const chipAt = ed.children.findIndex(c => c.classList && c.classList.contains('ankibridge-hole'));
+    hh.ctx.window.selection = fakeSelection(ed, chipAt, chipAt + 1);
+    row.querySelector('.ankibridge-holeadd').onclick();
+    assert.match(row.querySelector('.ankibridge-holemsg').textContent, /trou existant/);
     hh.ctx.window.selection = null;
     row.querySelector('.ankibridge-holeadd').onclick();
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /Sélectionne d’abord/);
   });
-  await ta('trous : « Modifier le texte » donne le texte brut, le retour réaffiche les cases', async () => {
+  await ta('éditeur : « Texte brut » montre le texte exact, le retour redessine l’éditeur', async () => {
     const ov = await openModal(respondOk(items2), HOLES);
     const row = rowsOf(ov)[0];
-    const toggle = row.querySelector('.ankibridge-holestoggle');
+    const toggle = row.querySelectorAll('.ankibridge-rawtoggle')[0];
     toggle.onclick();
-    assert.equal(row.querySelector('.ankibridge-holeeditor').hidden, true);
-    assert.equal(row.querySelectorAll('.ankibridge-field')[0].hidden, false, 'texte brut visible');
-    assert.equal(toggle.textContent, 'Revenir aux trous');
+    assert.equal(row.querySelectorAll('.ankibridge-rich')[0].hidden, true);
+    assert.equal(row.querySelectorAll('.ankibridge-field')[0].hidden, false);
+    assert.equal(toggle.textContent, 'Éditeur visuel');
     const area = row.querySelectorAll('textarea')[0];
-    area.value = 'Nouveau {{c1::texte}}'; area.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.ok(parseInt(area.style.height, 10) >= 120, 'zone de texte assez grande : ' + area.style.height);
+    area.value = 'Nouveau {{c1::texte}} en **gras**'; area.dispatchEvent(new Event('input', { bubbles: true }));
     toggle.onclick();
     assert.deepEqual(row.querySelectorAll('.ankibridge-holeinput').map(x => x.value), ['texte']);
-    assert.equal(row.querySelectorAll('.ankibridge-field')[0].hidden, true);
+    assert.equal(editorsOf(row)[0].querySelector('b').textContent, 'gras');
   });
-  await ta('trous : contenu hostile dans un trou reste du texte', async () => {
-    const cardsJson = JSON.stringify({ cards: [{ type: 'cloze', text: 'A {{c1::<img src=x onerror=alert(1)>}} <script>alert(2)</script>', extra: '' }] });
+  await ta('trous : contenu hostile reste du texte', async () => {
+    const cardsJson = JSON.stringify({ cards: [{ type: 'cloze', text: 'A {{c1::<img src=x onerror=alert(1)>}} <script>alert(2)</script>', extra: '<b>x</b>' }] });
     const ov = await openModal(respondOk([anItem('new')]), cardsJson);
     assert.equal(ov.querySelectorAll('img').length + ov.querySelectorAll('script').length, 0);
+    assert.equal(ov.querySelectorAll('.ankibridge-richedit b').length, 0, 'balise écrite par ChatGPT jamais interprétée');
     assert.equal(ov.querySelector('.ankibridge-holeinput').value, '<img src=x onerror=alert(1)>');
   });
 
-  /* --- 1.6.0 : création de paquet depuis la fenêtre --- */
+  /* --- 1.6.0 : champ paquet et création --- */
   const deckServer = (decks, log, n = 13) => msg => {
     log.push(msg);
     if (msg.type === 'DECKS') return { ok: true, value: decks.slice() };
@@ -1508,18 +1546,52 @@ async function contentTests() {
     return { ok: false, error: 'unexpected ' + msg.type };
   };
   const createOption = root => root.querySelector('.ankibridge-deckcreate');
-  await ta('création : proposée en dernière option, seulement sans correspondance exacte', async () => {
+  const panelOf = ov => ov.querySelector('.ankibridge-newdeck');
+  const typeName = (ov, name) => { const x = ov.querySelector('.ankibridge-newdeckname'); x.value = name; x.dispatchEvent(new Event('input', { bubbles: true })); };
+  await ta('champ paquet : Échap ou un clic ailleurs réaffichent le paquet choisi', async () => {
+    const ov = await openModal(deckServer(['Cours', 'Par défaut'], []));
+    const input = ov.querySelector('.ankibridge-deckinput');
+    input.dispatchEvent(new Event('focus'));
+    assert.equal(ov.querySelector('.ankibridge-decklist').hidden, false, 'liste ouverte au clic');
+    assert.equal(ov.querySelectorAll('.ankibridge-deckoption').length, 2, 'tous les paquets proposés');
+    input.value = 'zzz'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.match(ov.querySelector('.ankibridge-deckempty').textContent, /Aucun paquet ne contient « zzz »/);
+    input.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    assert.equal(input.value, 'Cours', 'Échap rétablit le paquet choisi');
+    input.value = 'Nouv'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('blur'));
+    await new Promise(r => setTimeout(r, 250));
+    assert.equal(input.value, 'Cours', 'un clic ailleurs rétablit le paquet choisi');
+    assert.equal(ov.querySelector('.ankibridge-decklist').hidden, true);
+  });
+  await ta('création : bouton « + Nouveau paquet » toujours visible, formulaire sous le champ', async () => {
+    const log = [];
+    const ov = await openModal(deckServer(['Cours', 'Par défaut'], log));
+    assert.equal(panelOf(ov).hidden, true);
+    ov.querySelector('.ankibridge-newdeckbtn').onclick();
+    assert.equal(panelOf(ov).hidden, false, 'formulaire ouvert');
+    assert.equal(ov.querySelector('.ankibridge-newdeckok').disabled, true, 'rien à créer sans nom');
+    typeName(ov, 'Cardio::Cours 3');
+    assert.match(ov.querySelector('.ankibridge-newdeckinfo').textContent, /« Cardio › Cours 3 » sera créé dans Anki ; le paquet parent « Cardio » n’existe pas encore et sera créé aussi/);
+    assert.equal(ov.querySelector('.ankibridge-newdeckok').disabled, false);
+    typeName(ov, 'Cours "3"');
+    assert.match(ov.querySelector('.ankibridge-newdeckinfo').textContent, /guillemets/);
+    assert.equal(ov.querySelector('.ankibridge-newdeckok').disabled, true);
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'rien n’est créé sans clic sur « Créer le paquet »');
+  });
+  await ta('création : dernière option de la liste, ouvre le formulaire prérempli', async () => {
     const ov = await openModal(deckServer(['Cours', 'Par défaut'], []));
     pickerOptions(ov, 'cours');
     assert.equal(createOption(ov), null, 'paquet existant (casse ignorée) : rien à créer');
-    pickerOptions(ov, 'Cou');
-    const list = ov.querySelector('.ankibridge-decklist');
-    assert.ok(createOption(ov), 'recherche partielle : création proposée');
-    assert.equal(list.children[list.children.length - 1], createOption(ov), 'en dernière option');
     pickerOptions(ov, 'Cardio::Cours 3');
-    assert.equal(createOption(ov).textContent, 'Créer le paquet « Cardio › Cours 3 »');
+    const list = ov.querySelector('.ankibridge-decklist');
+    assert.equal(list.children[list.children.length - 1], createOption(ov), 'en dernière option');
+    assert.equal(createOption(ov).textContent, '+ Créer le paquet « Cardio › Cours 3 »');
     assert.equal(createOption(ov).getAttribute('role'), 'option');
-    assert.ok(ov.querySelector('.ankibridge-deckempty'), '« Aucun résultat » reste affiché');
+    createOption(ov).click();
+    assert.equal(panelOf(ov).hidden, false);
+    assert.equal(ov.querySelector('.ankibridge-newdeckname').value, 'Cardio::Cours 3');
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours', 'le champ réaffiche le paquet choisi');
   });
   await ta('recherche : le nom complet « Parent::Enfant » (ou « › ») trouve le paquet existant', async () => {
     const ov = await openModal(deckServer(['Cours', 'Test Cartes vers Anki::1.6.0'], []));
@@ -1530,7 +1602,7 @@ async function contentTests() {
       assert.equal(createOption(ov), null, 'paquet existant : pas de création');
     }
   });
-  await ta('création : nom invalide expliqué, aucune option de création', async () => {
+  await ta('création : nom invalide expliqué dans la liste, aucune option de création', async () => {
     const ov = await openModal(deckServer(['Cours'], []));
     for (const [query, why] of [['Cours "3"', /guillemets/], ['A::', /niveau/], ['x'.repeat(151), /trop long/]]) {
       pickerOptions(ov, query);
@@ -1538,65 +1610,113 @@ async function contentTests() {
       assert.match(ov.querySelector('.ankibridge-deckinvalid').textContent, why);
     }
   });
-  await ta('création : confirmation dans la page, annuler n’écrit rien', async () => {
+  await ta('création : Annuler n’écrit rien', async () => {
     const log = [];
-    const ov = await openModal(deckServer(['Cours', 'Par défaut'], log));
-    pickerOptions(ov, 'Cardio::Cours 3');
-    createOption(ov).click();
-    await new Promise(r => setTimeout(r, 50));
-    const confirm = ov.querySelector('.ankibridge-confirm');
-    assert.ok(confirm, 'confirmation attendue');
-    assert.equal(confirm.querySelector('.ankibridge-confirmok').textContent, 'Créer le paquet');
-    assert.match(confirm.textContent, /« Cardio › Cours 3 » va être créé/);
-    assert.match(confirm.textContent, /paquet parent « Cardio » n’existe pas encore/);
-    confirm.querySelector('.ankibridge-cancel').onclick();
-    await new Promise(r => setTimeout(r, 100));
-    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'aucune création après annulation');
-    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Création annulée/);
-    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours', 'le champ réaffiche le paquet sélectionné');
-  });
-  await ta('création refusée par Anki : message clair, paquet courant conservé', async () => {
-    const log = [];
-    const respond = msg => msg.type === 'CREATE_DECK' ? { ok: false, error: 'Anki indisponible' } : deckServer(['Cours'], log)(msg);
-    const ov = await openModal(respond);
-    pickerOptions(ov, 'Nouveau');
-    createOption(ov).click();
-    await new Promise(r => setTimeout(r, 50));
-    ov.querySelector('.ankibridge-confirmok').onclick();
-    await new Promise(r => setTimeout(r, 200));
-    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Création impossible : Anki indisponible/);
+    const ov = await openModal(deckServer(['Cours'], log));
+    ov.querySelector('.ankibridge-newdeckbtn').onclick();
+    typeName(ov, 'Nouveau');
+    ov.querySelector('.ankibridge-newdeckcancel').onclick();
+    assert.equal(panelOf(ov).hidden, true);
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'));
     assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours');
   });
   await ta('création confirmée : liste rechargée, paquet sélectionné, comparaison relancée', async () => {
     const log = [];
-    const decks = ['Cours', 'Cardio'];
-    const ov = await openModal(deckServer(decks, log));
-    pickerOptions(ov, 'Cardio :: Cours 3');
-    createOption(ov).click();
-    await new Promise(r => setTimeout(r, 50));
-    assert.match(ov.querySelector('.ankibridge-confirm').textContent, /rangé dans le paquet existant « Cardio »/);
-    ov.querySelector('.ankibridge-confirmok').onclick();
+    const ov = await openModal(deckServer(['Cours', 'Cardio'], log));
+    ov.querySelector('.ankibridge-newdeckbtn').onclick();
+    typeName(ov, 'Cardio :: Cours 3');
+    assert.match(ov.querySelector('.ankibridge-newdeckinfo').textContent, /rangé dans le paquet existant « Cardio »/);
+    ov.querySelector('.ankibridge-newdeckok').onclick();
     await new Promise(r => setTimeout(r, 900));
     const created = log.filter(m => m.type === 'CREATE_DECK');
     assert.equal(created.length, 1);
     assert.equal(created[0].deck, 'Cardio::Cours 3', 'nom nettoyé transmis');
-    assert.equal(log.filter(m => m.type === 'DECKS').length, 2, 'liste des paquets rechargée');
-    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cardio › Cours 3', 'nouveau paquet sélectionné');
+    assert.equal(log.filter(m => m.type === 'DECKS').length, 2, 'liste rechargée');
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cardio › Cours 3');
     const analyses = log.filter(m => m.type === 'ANALYZE');
-    assert.equal(analyses[analyses.length - 1].deck, 'Cardio::Cours 3', 'comparaison relancée sur le nouveau paquet');
-    assert.equal(ov.querySelector('.ankibridge-action').disabled, false, 'import possible');
-    pickerOptions(ov, 'cardio::cours 3');
-    assert.equal(createOption(ov), null, 'le paquet créé fait désormais partie de la liste');
+    assert.equal(analyses[analyses.length - 1].deck, 'Cardio::Cours 3');
+    assert.equal(panelOf(ov).hidden, true, 'formulaire refermé');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false);
   });
-  await ta('création au clavier : Entrée sur un nom inconnu ouvre la confirmation', async () => {
+  await ta('création : paquet déjà existant → simplement choisi, rien de créé', async () => {
+    const log = [];
+    const ov = await openModal(deckServer(['Cours', 'Autre'], log));
+    ov.querySelector('.ankibridge-newdeckbtn').onclick();
+    typeName(ov, 'autre');
+    assert.equal(ov.querySelector('.ankibridge-newdeckok').textContent, 'Choisir ce paquet');
+    ov.querySelector('.ankibridge-newdeckok').onclick();
+    await new Promise(r => setTimeout(r, 600));
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'));
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Autre');
+  });
+  await ta('création refusée par Anki : erreur dans le formulaire, paquet courant conservé', async () => {
+    const log = [];
+    const respond = msg => msg.type === 'CREATE_DECK' ? { ok: false, error: 'Anki indisponible' } : deckServer(['Cours'], log)(msg);
+    const ov = await openModal(respond);
+    ov.querySelector('.ankibridge-newdeckbtn').onclick();
+    typeName(ov, 'Nouveau');
+    ov.querySelector('.ankibridge-newdeckok').onclick();
+    await new Promise(r => setTimeout(r, 200));
+    assert.match(ov.querySelector('.ankibridge-newdeckinfo').textContent, /Création impossible : Anki indisponible/);
+    assert.equal(panelOf(ov).hidden, false, 'formulaire laissé ouvert pour corriger');
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours');
+  });
+  await ta('création au clavier : Entrée dans la liste ouvre le formulaire, Entrée crée', async () => {
     const log = [];
     const ov = await openModal(deckServer(['Cours'], log));
     const input = ov.querySelector('.ankibridge-deckinput');
     input.value = 'Nouveau'; input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent({ type: 'keydown', key: 'Enter' });
-    await new Promise(r => setTimeout(r, 50));
-    assert.ok(ov.querySelector('.ankibridge-confirm'), 'confirmation attendue');
-    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'rien n’est créé sans confirmation');
+    assert.equal(panelOf(ov).hidden, false);
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'rien n’est créé à la première Entrée');
+    ov.querySelector('.ankibridge-newdeckname').dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await new Promise(r => setTimeout(r, 600));
+    assert.equal(log.filter(m => m.type === 'CREATE_DECK').length, 1);
+  });
+
+  /* --- 1.6.0 : mode sombre --- */
+  await ta('thème : automatique suit le système (en direct), clair / sombre imposés et mémorisés', async () => {
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))] }, respondOk([]));
+    const mq = { matches: true, listeners: [], addEventListener(_t, f) { this.listeners.push(f); }, removeEventListener() {} };
+    hh.ctx.window.matchMedia = () => mq;
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = hh.root.querySelector('.ankibridge-overlay');
+    const btn = ov.querySelector('.ankibridge-themebtn');
+    assert.equal(btn.textContent, 'Thème : automatique');
+    assert.ok(ov.classList.contains('ankibridge-dark'), 'système sombre → fenêtre sombre');
+    mq.matches = false; mq.listeners.forEach(f => f());
+    assert.ok(!ov.classList.contains('ankibridge-dark'), 'le changement du système est suivi');
+    btn.onclick();
+    assert.equal(btn.textContent, 'Thème : clair'); assert.equal(hh.storage.theme, 'light');
+    btn.onclick();
+    assert.equal(btn.textContent, 'Thème : sombre'); assert.ok(ov.classList.contains('ankibridge-dark')); assert.equal(hh.storage.theme, 'dark');
+    btn.onclick();
+    assert.equal(hh.storage.theme, 'auto');
+  });
+  await ta('thème : réglage « clair » respecté même si le système est sombre', async () => {
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], storage: { theme: 'light' } }, respondOk([]));
+    hh.ctx.window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ov = hh.root.querySelector('.ankibridge-overlay');
+    assert.ok(!ov.classList.contains('ankibridge-dark'));
+    assert.equal(ov.querySelector('.ankibridge-themebtn').textContent, 'Thème : clair');
+  });
+  await ta('CSS sombre : fond et textes lisibles (contraste ≥ 4,5)', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    const dark = css.split('Mode sombre')[1] || '';
+    const lum = hex => { const c = [0, 1, 2].map(i => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+    const bg = (dark.match(/\.ankibridge-dark \.ankibridge-dialog\{background:(#[0-9a-f]{6});color:(#[0-9a-f]{6})/) || []);
+    assert.ok(bg[1], 'fond sombre de la fenêtre défini');
+    for (const sel of ['ankibridge-recap', 'ankibridge-msg', 'ankibridge-richedit', 'ankibridge-holemsg.bad', 'ankibridge-newdeckinfo.bad']) {
+      const m = dark.match(new RegExp('\\.' + sel.replace('.', '\\.') + '[,{][^}]*?color:(#[0-9a-f]{6})'));
+      assert.ok(m, 'couleur sombre manquante pour ' + sel);
+      assert.ok(ratio(m[1], bg[1]) >= 4.5, `${sel} : contraste ${ratio(m[1], bg[1]).toFixed(2)}`);
+    }
   });
 
   /* --- 1.6.0 : tag commun au lot --- */
@@ -2083,7 +2203,8 @@ function popupHarness(respond, opts = {}) {
       querySelectorAll: s => doc.querySelectorAll(s),
       createElement: tag => new El(tag),
       createTextNode: t => new El('#text', {}, t),
-      addEventListener: () => {}
+      addEventListener: () => {},
+      documentElement: new El('html')
     },
     confirm: () => (opts.confirm === undefined ? true : opts.confirm),
     chrome: {
@@ -2099,7 +2220,7 @@ function popupHarness(respond, opts = {}) {
           if (r && typeof r.then === 'function') r.then(cb); else cb(r);
         }
       },
-      storage: { local: fakeStorage({ deck: opts.savedDeck === undefined ? 'Cours' : opts.savedDeck }) }
+      storage: { local: fakeStorage(Object.assign(opts.store || {}, { deck: opts.savedDeck === undefined ? 'Cours' : opts.savedDeck })) }
     }
   };
   ctx.globalThis = ctx;
@@ -2413,6 +2534,22 @@ async function popupTests() {
     assert.equal(cardsContext().toCards(example).length, 2);
     assert.equal(sharedContext().toAnkiHtml(example.cards[0].back), 'Réponse essentielle en une phrase.<br><br><b>Explication</b> :<ul><li>premier point</li><li>second point</li></ul>');
   });
+  await ta('popup : apparence automatique / clair / sombre, mémorisée et partagée', async () => {
+    const store = { theme: 'dark' };
+    const { $, ctx } = popupHarness(popupOk(), { store });
+    await settle();
+    assert.equal(ctx.document.documentElement.getAttribute('data-theme'), 'dark', 'réglage mémorisé appliqué');
+    assert.equal($('theme').value, 'dark');
+    assert.deepEqual($('theme').querySelectorAll('option').map(o => o.getAttribute('value')), ['auto', 'light', 'dark']);
+    assert.ok($('theme').closest('details'), 'réglage rangé dans « Réglages et dépannage »');
+    $('theme').value = 'auto'; $('theme').dispatchEvent(new Event('change'));
+    await settle();
+    assert.equal(ctx.document.documentElement.getAttribute('data-theme'), null, 'automatique : suit le système');
+    assert.equal(store.theme, 'auto');
+    const css = fs.readFileSync(EXT('popup.html'), 'utf8');
+    assert.match(css, /:root\[data-theme="dark"\] \.feedback\.ok\{color:#86efac\}/, 'sombre imposé');
+    assert.match(css, /:root:not\(\[data-theme="light"\]\) \.feedback\.ok\{color:#86efac\}/, 'automatique, sauf clair imposé');
+  });
   await ta('popup : l’exemple de secours est neutre et accepté par le parseur', async () => {
     const { $ } = popupHarness(popupOk());
     await settle();
@@ -2481,6 +2618,15 @@ function wellNested(html) {
     else if (stack.pop() !== m[2]) return false;
   }
   return stack.length === 0;
+}
+// Empreinte visuelle d'un rendu : chaque caractère avec l'ensemble trié de ses styles.
+function signature(node, styles = []) {
+  if (node.tagName === '#TEXT') return [...(node._text || '')].map(c => c + '{' + [...styles].sort().join(',') + '}').join('');
+  const tag = node.tagName.toLowerCase();
+  if (tag === 'br') return '|';
+  const next = ['b', 'i', 'sup', 'sub', 'code'].includes(tag) && !styles.includes(tag) ? styles.concat(tag) : styles;
+  const inner = (node._text ? [...node._text].map(c => c + '{' + [...next].sort().join(',') + '}').join('') : '') + node.children.map(c => signature(c, next)).join('');
+  return tag === 'li' ? '[li:' + inner + ']' : tag === 'ul' || tag === 'ol' ? `<${tag}${node.getAttribute('start') || ''}>` + inner + `</${tag}>` : inner;
 }
 function formatTests() {
   const S = sharedContext();
@@ -2637,6 +2783,36 @@ function formatTests() {
     assert.equal(S.addCloze(text, text.indexOf('suit') - 1, text.indexOf('suit') + 5).text.includes('{{c2::suit}}'), true, 'espaces de bord retirés');
     assert.equal(S.readableTitle('Le {{c1::**DORA**::4 étapes}} et {{c2::Na^+^}}'), 'Le [DORA] et [Na+]');
   });
+  t('éditeur → texte : aller-retour sans perte sur 2000 textes aléatoires', () => {
+    const doc = { createElement: tag => new El(tag), createTextNode: x => new El('#text', {}, x) };
+    let seed = 99;
+    const rnd = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const bits = ['**', '*', '^', '~', '`', 'mot', 'Na', '+', '2', ' ', '\n', '\n\n', '- ', '1. ', ':', '<', '&', '"'];
+    for (let n = 0; n < 2000; n++) {
+      const text = Array.from({ length: 1 + rnd(12) }, () => bits[rnd(bits.length)]).join('').replace(/^\s+|\s+$/g, '');
+      const box = new El('div');
+      S.renderInto(box, text, doc);
+      const back = S.domToMarkdown(box);
+      // Rendu identique caractère par caractère (styles, sauts, listes) ; l'ordre
+      // d'imbrication de deux styles (<b><sup> ou <sup><b>) n'a pas d'effet visible.
+      const look = md => { const b = new El('div'); S.renderInto(b, md, doc); return signature(b); };
+      assert.equal(look(back), look(text), 'aller-retour : ' + JSON.stringify(text) + ' -> ' + JSON.stringify(back));
+    }
+  });
+  t('éditeur → texte : ce que produit Chrome (div, br, listes, styles imbriqués, collage)', () => {
+    const md = (...kids) => S.domToMarkdown(h('div', { contenteditable: 'true' }, ...kids));
+    assert.equal(md('Ligne 1', h('div', {}, 'Ligne 2'), h('div', {}, h('br')), h('div', {}, 'Ligne 4')), 'Ligne 1\nLigne 2\n\nLigne 4');
+    assert.equal(md(h('b', {}, 'gras ', h('i', {}, 'et italique')), ' fin'), '**gras *et italique*** fin', 'styles imbriqués');
+    assert.equal(md(h('b', {}, 'a', h('b', {}, 'b'))), '**ab**', 'gras imbriqué : un seul gras');
+    assert.equal(md(h('b', {}, ' espace ')), ' **espace** ', 'espaces sortis des marqueurs');
+    assert.equal(md(h('ol', { start: '3' }, h('li', {}, 'trois'), h('li', {}, h('div', {}, 'quatre')))), '3. trois\n4. quatre');
+    assert.equal(md('Na', h('sup', {}, '+'), ' et H', h('sub', {}, '2'), 'O'), 'Na^+^ et H~2~O');
+    assert.equal(md(h('span', { style: 'color:red' }, 'rouge'), h('a', { href: 'x' }, 'lien'), h('img', { src: 'x' })), 'rougelien', 'styles, liens et images ignorés');
+    assert.equal(md(h('span', { class: 'ankibridge-hole', 'data-src': '{{c1::**DORA**::indice}}' }, h('input'), '×')), '{{c1::**DORA**::indice}}', 'trou recopié tel quel');
+    assert.equal(md('a', h('br')), 'a', 'bouche-trou final ignoré');
+    assert.equal(md('Na', h('sup', {}, '+ et plus')), 'Na^+^ ^et^ ^plus^', 'exposant avec espaces : jamais de ^ visible dans Anki');
+    assert.equal(H(md('Na', h('sup', {}, '+ et plus'))), 'Na<sup>+</sup> <sup>et</sup> <sup>plus</sup>');
+  });
   t('paquet : validation du nom à créer', () => {
     const ok = x => S.validateDeckName(x);
     assert.equal(ok('Cardio::Cours 3').name, 'Cardio::Cours 3');
@@ -2713,7 +2889,7 @@ function manifestTests() {
   });
   t('chargement : shared.js en premier partout (page, popup, service worker)', () => {
     const page = CONTENT_SCRIPTS();
-    assert.deepEqual(page, ['shared.js', 'cards.js', 'picker.js', 'holes.js', 'review.js', 'content.js']);
+    assert.deepEqual(page, ['shared.js', 'cards.js', 'picker.js', 'rich.js', 'review.js', 'content.js']);
     assert.equal(POPUP_SCRIPTS()[0], 'shared.js');
     assert.equal(BACKGROUND_SCRIPTS()[0], 'shared.js');
     for (const f of [...page, ...POPUP_SCRIPTS(), ...BACKGROUND_SCRIPTS()]) assert.ok(fs.existsSync(EXT(f)), f + ' manquant');
@@ -2723,13 +2899,13 @@ function manifestTests() {
     assert.ok(!/function showModal|function createDeckPicker|function askConfirm/.test(content), 'la fenêtre ne vit plus dans content.js');
     assert.match(fs.readFileSync(EXT('review.js'), 'utf8'), /async function showModal/);
     assert.match(fs.readFileSync(EXT('picker.js'), 'utf8'), /function createDeckPicker/);
-    for (const f of ['content.js', 'picker.js', 'holes.js', 'review.js']) {
+    for (const f of ['content.js', 'picker.js', 'rich.js', 'review.js']) {
       const lines = fs.readFileSync(EXT(f), 'utf8').split('\n').length;
       assert.ok(lines < 520, `${f} : ${lines} lignes`);
     }
   });
   t('fonctions communes définies une seule fois (shared.js)', () => {
-    for (const f of ['content.js', 'picker.js', 'holes.js', 'review.js', 'popup.js', 'background.js', 'search.js']) {
+    for (const f of ['content.js', 'picker.js', 'rich.js', 'review.js', 'popup.js', 'background.js', 'search.js']) {
       const src = fs.readFileSync(EXT(f), 'utf8');
       assert.ok(!/(const|function)\s+(normText|deckLabel)\b\s*[=(]/.test(src), `${f} redéfinit normText ou deckLabel`);
       assert.ok(!/replaceAll\('&', '&amp;'\)|replace\(\/&amp;\/gi/.test(src), `${f} réimplémente l’échappement HTML`);
