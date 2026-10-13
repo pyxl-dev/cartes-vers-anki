@@ -14,6 +14,26 @@ let declared = 0;   // nombre de tests déclarés, pour détecter une suite tron
 const t = (name, fn) => { declared++; try { fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + e.message); } };
 const ta = async (name, fn) => { declared++; try { await fn(); pass++; console.log('PASS  ' + name); } catch (e) { fail++; console.log('FAIL  ' + name + '\n      -> ' + (e && e.stack ? e.stack.split('\n').slice(0, 5).join('\n         ') : e.message)); } };
 const load = (ctx, name) => vm.runInContext(fs.readFileSync(EXT(name), 'utf8'), ctx, { filename: name });
+/* Ordre de chargement RÉEL, lu dans les fichiers livrés : les tests chargent les
+   scripts exactement comme le navigateur (manifeste, popup.html, importScripts). */
+const MANIFEST = () => JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
+const CONTENT_SCRIPTS = () => MANIFEST().content_scripts[0].js;
+const POPUP_SCRIPTS = () => [...fs.readFileSync(EXT('popup.html'), 'utf8').matchAll(/<script src="([^"]+)"/g)].map(m => m[1]);
+const BACKGROUND_SCRIPTS = () => {
+  const m = fs.readFileSync(EXT('background.js'), 'utf8').match(/importScripts\(([^)]*)\)/);
+  return [...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]).concat('background.js');
+};
+// chrome.storage.local simulé, respectant les clés demandées.
+const fakeStorage = (storage = {}) => ({
+  get: async keys => {
+    if (keys == null) return { ...storage };
+    const list = Array.isArray(keys) ? keys : [keys];
+    const out = {}; for (const k of list) if (k in storage) out[k] = storage[k];
+    return out;
+  },
+  set: async obj => { Object.assign(storage, obj); },
+  remove: async keys => { for (const k of (Array.isArray(keys) ? keys : [keys])) delete storage[k]; }
+});
 
 /* ------------------------------------------------------------------ *
  * 1. Analyse du JSON produit par ChatGPT (cards.js)                  *
@@ -24,6 +44,13 @@ function cardsContext() {
   vm.createContext(ctx);
   load(ctx, 'cards.js');
   return ctx.AnkiCards;
+}
+function sharedContext() {
+  const ctx = { console };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  load(ctx, 'shared.js');
+  return ctx.AnkiShared;
 }
 
 const basic = n => Array.from({ length: n }, (_, i) => ({ type: 'basic', front: 'Q' + (i + 1), back: 'R' + (i + 1) }));
@@ -122,22 +149,13 @@ function bgContext({ fetchImpl, storage = {} } = {}) {
     fetch: fetchImpl || (() => { throw new TypeError('fetch not stubbed'); }),
     chrome: {
       runtime: { id: 'test-extension-id', onMessage: { addListener: fn => listeners.push(fn) } },
-      storage: { local: {
-        get: async keys => {
-          if (keys == null) return { ...storage };
-          const list = Array.isArray(keys) ? keys : [keys];
-          const out = {}; for (const k of list) if (k in storage) out[k] = storage[k];
-          return out;
-        },
-        set: async obj => { Object.assign(storage, obj); },
-        remove: async keys => { for (const k of (Array.isArray(keys) ? keys : [keys])) delete storage[k]; }
-      } }
+      storage: { local: fakeStorage(storage) }
     },
     importScripts: () => {}
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  load(ctx, 'search.js'); load(ctx, 'similarity.js'); load(ctx, 'background.js');
+  for (const f of BACKGROUND_SCRIPTS()) load(ctx, f);
   return { ctx, listeners, storage };
 }
 const ankiOk = value => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ result: value, error: null }) });
@@ -199,12 +217,52 @@ function portTests() {
 /* ------------------------------------------------------------------ *
  * 3. Intégration avec un AnkiConnect SIMULÉ (boucle locale, port libre) *
  * ------------------------------------------------------------------ */
+/* Faux AnkiConnect. Comme le vrai :
+   - « multi » exécute chaque sous-action et renvoie {result, error} pour CHACUNE
+     (une note refusée n'empêche pas les autres) ;
+   - « addNotes » des versions récentes échoue EN BLOC si une seule note est refusée.
+   Une note dont le recto contient « REFUS » est rejetée par Anki (échec partiel).
+   state.failMulti simule une erreur globale de « multi » (repli carte par carte). */
 function startMockAnki() {
-  const state = { decks: ['Par défaut', 'Cours'], models: ['Basique', 'Basic', 'Cloze', 'Texte à trous'], notes: new Map(), nextId: 5000, actions: [] };
+  const state = { decks: ['Par défaut', 'Cours'], models: ['Basique', 'Basic', 'Cloze', 'Texte à trous'], notes: new Map(), nextId: 5000, actions: [], added: [], failMulti: false };
   const fp = n => {
     const f = n.fields || {};
     const key = /(clo|trou)/i.test(n.modelName || '') ? 'cloze' : 'basic';
     return key + ':' + String(Object.values(f)[0] ?? '').toLowerCase();
+  };
+  const addOne = note => {
+    if (String(Object.values(note.fields || {})[0] ?? '').includes('REFUS')) throw new Error('cannot create note: refused by test');
+    const k = fp(note);
+    if (state.notes.has(k)) throw new Error('cannot create note because it is a duplicate');
+    const id = ++state.nextId; state.notes.set(k, id); state.added.push(note); return id;
+  };
+  const handle = (action, prm) => {
+    switch (action) {
+      case 'version': return 6;
+      case 'requestPermission': return { permission: 'granted', requireApiKey: false };
+      case 'deckNames': return state.decks.slice();
+      case 'createDeck': { const found = state.decks.find(d => d.toLowerCase() === String(prm.deck).toLowerCase()); if (!found) state.decks.push(String(prm.deck)); return 1700000000000 + state.decks.length; }
+      case 'modelNames': return state.models.slice();
+      case 'modelFieldNames': return /(clo|trou)/i.test(prm.modelName) ? ['Text', 'Back Extra'] : ['Front', 'Back'];
+      case 'canAddNotes': { const seen = new Set(); return (prm.notes || []).map(n => { const k = fp(n); if (state.notes.has(k) || seen.has(k)) return false; seen.add(k); return true; }); }
+      case 'addNote': return addOne(prm.note);
+      case 'addNotes': {
+        const notes = prm.notes || [];
+        const bad = notes.findIndex(n => String(Object.values(n.fields || {})[0] ?? '').includes('REFUS') || state.notes.has(fp(n)));
+        if (bad >= 0) throw new Error(`['cannot create note (index ${bad})']`);
+        return notes.map(addOne);
+      }
+      case 'multi':
+        if (state.failMulti) throw new Error('multi indisponible (test)');
+        return (prm.actions || []).map(a => {
+          state.actions.push('multi:' + a.action);
+          try { return { result: handle(a.action, a.params || {}), error: null }; }
+          catch (e) { return { result: null, error: e.message }; }
+        });
+      case 'findNotes': { const q = String(prm.query || ''); return q.includes('"Cours"') ? [...state.notes.values()] : []; }
+      case 'notesInfo': return (prm.notes || []).map(id => ({ noteId: id, modelName: 'Basique', tags: ['chatgpt'], fields: { Front: { value: 'Note ' + id, order: 0 }, Back: { value: 'r', order: 1 } } }));
+      default: throw new Error('unsupported action ' + action);
+    }
   };
   const server = http.createServer((req, res) => {
     let body = '';
@@ -212,35 +270,34 @@ function startMockAnki() {
     req.on('end', () => {
       let out = { result: null, error: null };
       try {
-        const p = JSON.parse(body || '{}'); const prm = p.params || {};
+        const p = JSON.parse(body || '{}');
         state.actions.push(p.action);
-        switch (p.action) {
-          case 'version': out.result = 6; break;
-          case 'requestPermission': out.result = { permission: 'granted', requireApiKey: false }; break;
-          case 'deckNames': out.result = state.decks.slice(); break;
-          case 'modelNames': out.result = state.models.slice(); break;
-          case 'modelFieldNames': out.result = /(clo|trou)/i.test(prm.modelName) ? ['Text', 'Back Extra'] : ['Front', 'Back']; break;
-          case 'canAddNotes': { const seen = new Set(); out.result = (prm.notes || []).map(n => { const k = fp(n); if (state.notes.has(k) || seen.has(k)) return false; seen.add(k); return true; }); break; }
-          case 'addNote': { const k = fp(prm.note); if (state.notes.has(k)) { out.result = null; break; } const id = ++state.nextId; state.notes.set(k, id); out.result = id; break; }
-          case 'findNotes': { const q = String(prm.query || ''); out.result = q.includes('"Cours"') ? [...state.notes.values()] : []; break; }
-          case 'notesInfo': out.result = (prm.notes || []).map(id => ({ noteId: id, modelName: 'Basique', tags: ['chatgpt'], fields: { Front: { value: 'Note ' + id, order: 0 }, Back: { value: 'r', order: 1 } } })); break;
-          default: out.error = 'unsupported action ' + p.action;
-        }
-      } catch (e) { out.error = String(e); }
+        out.result = handle(p.action, p.params || {});
+      } catch (e) { out.error = e.message || String(e); }
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out));
     });
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, state, port: server.address().port })));
 }
 
+/* Garde-fou : les tests d'intégration ne joignent QUE le faux AnkiConnect. Sans
+   lui, après CLEAR_PORT, la détection automatique sonderait 8765 / 8766 et
+   pourrait écrire dans le vrai Anki ouvert sur la machine de développement. */
+const onlyMock = (port, seen = []) => (url, opt) => {
+  seen.push(String(url));
+  return String(url) === `http://127.0.0.1:${port}` ? globalThis.fetch(url, opt) : Promise.reject(new TypeError('hors du faux AnkiConnect : ' + url));
+};
 const SENDER = { id: 'test-extension-id', url: 'https://chatgpt.com/' };
+// Objets créés dans le contexte vm : comparés par leur contenu JSON.
+const plain = v => JSON.parse(JSON.stringify(v));
 function send(listeners, message, sender = SENDER) {
   return new Promise(resolve => { const r = v => resolve(v); listeners[0](message, sender, r); });
 }
 
 async function integrationTests() {
   const { server, state, port } = await startMockAnki();
-  const { ctx, listeners, storage } = bgContext({ fetchImpl: globalThis.fetch });
+  const urls = [];
+  const { ctx, listeners, storage } = bgContext({ fetchImpl: onlyMock(port, urls) });
   storage.ankiPort = port; // choix manuel pointant sur le faux AnkiConnect
   const cards = n => basic(n).map(c => ({ ...c, tags: ['test'] }));
 
@@ -315,6 +372,8 @@ async function integrationTests() {
     assert.equal(storage.ankiPort, 49001);
     await send(listeners, { type: 'CLEAR_PORT' });
     assert.equal('ankiPort' in storage, false);
+    // Retour au faux AnkiConnect pour la suite.
+    storage.ankiPort = port; ctx.invalidatePort();
   });
   await ta('SÉCURITÉ : origine non autorisée rejetée', async () => {
     const r = await send(listeners, { type: 'DECKS' }, { id: 'test-extension-id', url: 'https://evil.example.com/' });
@@ -331,6 +390,151 @@ async function integrationTests() {
   await ta('Aucune action d’écriture pendant la sonde de port', async () => {
     assert.ok(!state.actions.includes('deleteNotes'));
     assert.ok(!state.actions.includes('deleteDecks'));
+  });
+
+  await ta('isolement : aucune requête n’est partie ailleurs que vers le faux AnkiConnect', async () => {
+    const others = urls.filter(u => u !== `http://127.0.0.1:${port}`);
+    assert.ok(others.every(u => /:(8765|8766)$/.test(u)), 'seule la sonde (refusée) peut viser un port usuel : ' + others.join(', '));
+    assert.equal((await send(listeners, { type: 'PORT' })).value, port, 'le port de test est de nouveau utilisé');
+  });
+
+  /* --- 1.6.0 : import groupé (multi) --- */
+  const fresh = (n, tag) => basic(n).map(c => ({ ...c, front: c.front + '-' + tag, tags: [] }));
+  const count = (a, before = []) => state.actions.filter(x => x === a).length - before.filter(x => x === a).length;
+  await ta('IMPORT groupé : un seul appel multi, aucun addNote individuel', async () => {
+    const before = state.actions.slice();
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: fresh(40, 'multi') });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual([r.value.added, r.value.skipped, r.value.errors.length], [40, 0, 0]);
+    assert.equal(count('multi', before), 1, 'un seul envoi groupé');
+    assert.equal(count('addNote', before), 0, 'aucun aller-retour par carte');
+    assert.equal(count('multi:addNote', before), 40);
+    assert.equal(count('addNotes', before), 0, 'addNotes (échec en bloc) jamais utilisé');
+  });
+  await ta('IMPORT groupé : échec partiel -> les autres cartes passent, erreur numérotée', async () => {
+    const cards = fresh(5, 'partiel'); cards[1].front = 'REFUS carte deux'; cards[3].front = 'REFUS carte quatre';
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards });
+    assert.equal(r.value.added, 3);
+    assert.equal(r.value.skipped, 0);
+    assert.deepEqual(plain(r.value.errors), ['Carte 2 : cannot create note: refused by test', 'Carte 4 : cannot create note: refused by test']);
+  });
+  await ta('IMPORT groupé : doublons et erreurs gardent le numéro de la carte d’origine', async () => {
+    const cards = [{ type: 'basic', front: 'Q1-multi', back: 'déjà là' }, ...fresh(2, 'numero'), { type: 'basic', front: 'REFUS numéro 4', back: 'x' }];
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards });
+    assert.deepEqual([r.value.added, r.value.skipped], [2, 1]);
+    assert.deepEqual(plain(r.value.errors), ['Carte 4 : cannot create note: refused by test']);
+  });
+  await ta('IMPORT groupé : erreur globale de multi -> repli carte par carte, même résultat', async () => {
+    state.failMulti = true;
+    try {
+      const before = state.actions.slice();
+      const cards = fresh(5, 'repli'); cards[1].front = 'REFUS repli';
+      const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.value.added, 4);
+      assert.deepEqual(plain(r.value.errors), ['Carte 2 : cannot create note: refused by test']);
+      assert.equal(count('addNote', before), 5, 'repli : un addNote par carte encore ajoutable');
+      assert.equal(count('canAddNotes', before), 2, 'doublons recontrôlés avant le repli');
+    } finally { state.failMulti = false; }
+  });
+  await ta('IMPORT groupé : multi écrit puis échoue -> aucune note écrite deux fois', async () => {
+    const realHandle = state.failMulti;
+    const addedBefore = state.added.length;
+    // Simule un délai dépassé : Anki a écrit les notes mais la réponse est perdue.
+    state.failMulti = false;
+    const cards = fresh(3, 'perdu');
+    const r0 = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards });
+    assert.equal(r0.value.added, 3);
+    state.failMulti = true;
+    try {
+      const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards });
+      assert.equal(r.value.added, 0);
+      assert.equal(r.value.skipped, 3, 'notes déjà présentes : signalées comme doublons');
+      assert.equal(state.added.length - addedBefore, 3, 'jamais de double écriture');
+    } finally { state.failMulti = realHandle; }
+  });
+
+  /* --- 1.6.0 : mise en forme et doublons --- */
+  await ta('IMPORT : mise en forme convertie en HTML dans les champs Anki', async () => {
+    const card = { type: 'basic', front: '**Ion** Na^+^ et H~2~O', back: 'Liste :\n- un\n- deux', tags: [] };
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: [card] });
+    assert.equal(r.value.added, 1);
+    const note = state.added[state.added.length - 1];
+    assert.equal(note.fields.Front, '<b>Ion</b> Na<sup>+</sup> et H<sub>2</sub>O');
+    assert.equal(note.fields.Back, 'Liste :<ul><li>un</li><li>deux</li></ul>');
+  });
+  await ta('doublon : une carte reformatée à l’identique reste un doublon (analyse et import)', async () => {
+    const card = { type: 'basic', front: '**Ion** Na^+^ et H~2~O', back: 'autre', tags: [] };
+    const a = await send(listeners, { type: 'ANALYZE', deck: 'Cours', cards: [card] });
+    assert.equal(a.value.items[0].kind, 'exact');
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: [card] });
+    assert.deepEqual([r.value.added, r.value.skipped], [0, 1]);
+  });
+  await ta('texte sans mise en forme : champ identique à la version 1.5 (doublons anciens reconnus)', async () => {
+    const card = { type: 'basic', front: 'Ancienne <carte> & "guillemets"\nligne 2', back: 'r', tags: [] };
+    await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: [card] });
+    const note = state.added[state.added.length - 1];
+    assert.equal(note.fields.Front, 'Ancienne &lt;carte&gt; &amp; &quot;guillemets&quot;<br>ligne 2');
+  });
+
+  /* --- 1.6.0 : tag commun au lot --- */
+  await ta('tag du lot : ajouté à chaque carte, normalisé, hors limite de 8 tags', async () => {
+    const own = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'];
+    const cards = fresh(2, 'tag').map(c => ({ ...c, tags: own }));
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards, batchTag: ' Cardio::Cours 3 ' });
+    assert.equal(r.value.added, 2);
+    assert.equal(r.value.batchTag, 'Cardio::Cours_3');
+    for (const note of state.added.slice(-2)) {
+      assert.ok(note.tags.includes('Cardio::Cours_3'), 'tag du lot présent');
+      assert.deepEqual(note.tags.filter(t => /^t\d$/.test(t)), own, 'les 8 tags de la carte sont conservés');
+      assert.equal(note.tags.length, 10, 'chatgpt + 8 tags + tag du lot');
+    }
+  });
+  await ta('tag du lot : vide ou inutilisable -> ignoré, rien d’autre ne change', async () => {
+    for (const batchTag of ['', '   ', '<<>>', 42]) {
+      const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: fresh(1, 'sanstag' + String(batchTag).length), batchTag });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(state.added[state.added.length - 1].tags, ['chatgpt'], 'batchTag=' + JSON.stringify(batchTag));
+    }
+  });
+
+  /* --- 1.6.0 : création de paquet --- */
+  await ta('CREATE_DECK : sous-paquet « Parent::Enfant » créé, puis listé', async () => {
+    const before = state.actions.slice();
+    const r = await send(listeners, { type: 'CREATE_DECK', deck: '  Cardio :: Cours 3 ' });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(plain(r.value), { deck: 'Cardio::Cours 3', created: true });
+    assert.equal(count('createDeck', before), 1);
+    const d = await send(listeners, { type: 'DECKS' });
+    assert.ok(d.value.includes('Cardio::Cours 3'));
+  });
+  await ta('CREATE_DECK : paquet existant (casse ignorée) -> jamais recréé', async () => {
+    const before = state.actions.slice();
+    const r = await send(listeners, { type: 'CREATE_DECK', deck: 'cours' });
+    assert.deepEqual(plain(r.value), { deck: 'Cours', created: false });
+    assert.equal(count('createDeck', before), 0);
+  });
+  await ta('CREATE_DECK : noms vides, trop longs ou avec guillemets refusés sans écriture', async () => {
+    const before = state.actions.slice();
+    for (const deck of ['', '   ', '::', 'A::', 'A::::B', 'x'.repeat(151), 'Cours "3"', 'Cours « 3 »', null]) {
+      const r = await send(listeners, { type: 'CREATE_DECK', deck });
+      assert.equal(r.ok, false, 'accepté à tort : ' + JSON.stringify(deck));
+    }
+    assert.equal(count('createDeck', before), 0, 'aucune création');
+    const ok = await send(listeners, { type: 'CREATE_DECK', deck: 'x'.repeat(150) });
+    assert.equal(ok.ok, true, '150 caractères acceptés');
+  });
+  await ta('SÉCURITÉ : CREATE_DECK depuis une origine non autorisée rejeté', async () => {
+    const before = state.actions.slice();
+    const r = await send(listeners, { type: 'CREATE_DECK', deck: 'Pirate' }, { id: 'test-extension-id', url: 'https://evil.example.com/' });
+    assert.equal(r.ok, false); assert.match(r.error, /Origine non autorisée/);
+    assert.equal(count('createDeck', before), 0);
+    assert.ok(!state.decks.includes('Pirate'));
+  });
+  await ta('import dans un paquet tout juste créé', async () => {
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cardio::Cours 3', cards: fresh(2, 'nouveau') });
+    assert.equal(r.value.added, 2);
+    assert.ok(state.added.slice(-2).every(n => n.deckName === 'Cardio::Cours 3'));
   });
   await new Promise(r => server.close(r));
 }
@@ -423,7 +627,7 @@ class El {
 }
 const h = (tag, attrs, ...kids) => { const e = new El(tag, attrs || {}); if (kids.length) e.append(...kids); return e; };
 
-function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }, respond) {
+function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours', storage: initial = {} }, respond) {
   const root = h('div', { id: 'root' });
   if (userBody) {
     const ub = h('div', { 'data-user-message-bubble': '' }, h('div', { class: 'markdown' }, ...userBody));
@@ -435,6 +639,7 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }
   const body = h('body');
   root.append(body);
   const documentListeners = {};
+  const storage = { deck: savedDeck, ...initial };
   const doc = {
     documentElement: root, body,
     createElement: tag => new El(tag),
@@ -460,14 +665,13 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours' }
         sendMessage: (msg, cb) => { const r = respond(msg); if (r && typeof r.then === 'function') r.then(cb); else cb(r); },
         onMessage: { addListener: fn => listeners.push(fn) }
       },
-      storage: { local: { get: async () => ({ deck: savedDeck }), set: async () => {} } }
+      storage: { local: fakeStorage(storage) }
     }
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  load(ctx, 'cards.js');
-  load(ctx, 'content.js');
-  return { ctx, root, body, listeners, observers, documentListeners };
+  for (const f of CONTENT_SCRIPTS()) load(ctx, f);
+  return { ctx, root, body, listeners, observers, documentListeners, storage };
 }
 const countButtons = root => root.querySelectorAll('.ankibridge-btn').length;
 const JSON13 = JSON.stringify({ cards: [...basic(10), { type: 'cloze', text: 'Le {{c1::GLOOP}} fabrique.', extra: '' }, { type: 'cloze', text: 'Le {{c1::ZORK}} sert.', extra: '' }, { type: 'cloze', text: 'Le GLOOP fait {{c1::42 blops}}.', extra: '' }] });
@@ -1163,6 +1367,180 @@ async function contentTests() {
     assert.equal(dots.filter(d => d.className.includes('similar')).length, 15);
     assert.equal(dots.filter(d => d.className.includes('new')).length, 20);
   });
+
+  /* --- 1.6.0 : aperçu mis en forme --- */
+  const FMT = JSON.stringify({ cards: [
+    { type: 'basic', front: '**Gras** et Na^+^', back: 'Liste :\n- un\n- deux' },
+    { type: 'cloze', text: 'L’eau : {{c1::H~2~O::formule}}', extra: '' },
+    { type: 'basic', front: '<img src=x onerror=alert(1)> **<script>alert(2)</script>**', back: '`<b>`' }
+  ] });
+  const items3 = Array.from({ length: 3 }, () => anItem('new'));
+  await ta('aperçu : mis en forme à côté du texte modifiable, mis à jour à la frappe', async () => {
+    const ov = await openModal(respondOk(items3), FMT);
+    const row = rowsOf(ov)[0];
+    const fields = row.querySelectorAll('.ankibridge-field');
+    assert.equal(fields.length, 2, 'question et réponse ont chacune leur aperçu');
+    assert.ok(fields[0].querySelector('textarea') && fields[0].querySelector('.ankibridge-preview'), 'texte et aperçu côte à côte');
+    const body0 = fields[0].querySelector('.ankibridge-previewbody');
+    assert.equal(body0.querySelector('b').textContent, 'Gras');
+    assert.equal(body0.querySelector('sup').textContent, '+');
+    assert.equal(fields[1].querySelectorAll('.ankibridge-previewbody ul li').length, 2);
+    assert.equal(row.querySelector('.ankibridge-title').textContent, '1. [Basique] Gras et Na+', 'titre sans marqueurs');
+    const area = fields[0].querySelector('textarea');
+    area.value = '*nouveau* texte'; area.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(body0.querySelector('i').textContent, 'nouveau');
+    assert.equal(body0.querySelectorAll('b').length, 0, 'aperçu reconstruit');
+    const cloze = rowsOf(ov)[1].querySelector('.ankibridge-cloze');
+    assert.ok(cloze, 'trou affiché dans l’aperçu');
+    assert.equal(cloze.querySelector('sub').textContent, '2');
+    assert.match(cloze.textContent, /indice : formule/);
+  });
+  await ta('aperçu : contenu hostile affiché comme du texte, jamais interprété', async () => {
+    const ov = await openModal(respondOk(items3), FMT);
+    assert.equal(ov.querySelectorAll('img').length, 0, 'aucune image créée');
+    assert.equal(ov.querySelectorAll('script').length, 0, 'aucun script créé');
+    const preview = rowsOf(ov)[2].querySelector('.ankibridge-previewbody');
+    assert.match(preview.textContent, /<img src=x onerror=alert\(1\)>/);
+    assert.equal(preview.querySelector('b').textContent, '<script>alert(2)</script>');
+  });
+
+  await ta('remplacement : un simple changement de mise en forme n’est pas annoncé', async () => {
+    const cardsJson = JSON.stringify({ cards: [{ type: 'basic', front: '**Q1**', back: '- R1' }, { type: 'basic', front: 'Q2', back: '**Nouvelle** réponse' }] });
+    const dups = [{ ...DUP_OK, front: 'Q1', back: 'R1' }, { ...DUP_OK, id: 4243, front: 'Q2', back: 'Ancienne réponse' }];
+    const ov = await openModal(respondOk(dups.map(d => anItem('exact', { duplicates: [d], replaceable: true }))), cardsJson);
+    const rows = rowsOf(ov);
+    assert.equal(rows[0].querySelector('.ankibridge-replacebox-input').disabled, true, 'mise en forme seule : rien à remplacer');
+    assert.match(rows[0].querySelector('.ankibridge-diff').textContent, /Aucun champ ne diffère/);
+    assert.equal(rows[1].querySelector('.ankibridge-replacebox-input').disabled, false, 'vrai changement de texte : remplacement proposé');
+  });
+
+  /* --- 1.6.0 : création de paquet depuis la fenêtre --- */
+  const deckServer = (decks, log, n = 13) => msg => {
+    log.push(msg);
+    if (msg.type === 'DECKS') return { ok: true, value: decks.slice() };
+    if (msg.type === 'CREATE_DECK') { decks.push(msg.deck); return { ok: true, value: { deck: msg.deck, created: true } }; }
+    if (msg.type === 'ANALYZE') return { ok: true, value: { items: Array.from({ length: n }, () => anItem('new')), totalExisting: 0, scanned: 0, partial: false, scope: msg.deck } };
+    if (msg.type === 'IMPORT') return { ok: true, value: { added: msg.cards.length, skipped: 0, errors: [], total: msg.cards.length } };
+    return { ok: false, error: 'unexpected ' + msg.type };
+  };
+  const createOption = root => root.querySelector('.ankibridge-deckcreate');
+  await ta('création : proposée en dernière option, seulement sans correspondance exacte', async () => {
+    const ov = await openModal(deckServer(['Cours', 'Par défaut'], []));
+    pickerOptions(ov, 'cours');
+    assert.equal(createOption(ov), null, 'paquet existant (casse ignorée) : rien à créer');
+    pickerOptions(ov, 'Cou');
+    const list = ov.querySelector('.ankibridge-decklist');
+    assert.ok(createOption(ov), 'recherche partielle : création proposée');
+    assert.equal(list.children[list.children.length - 1], createOption(ov), 'en dernière option');
+    pickerOptions(ov, 'Cardio::Cours 3');
+    assert.equal(createOption(ov).textContent, 'Créer le paquet « Cardio › Cours 3 »');
+    assert.equal(createOption(ov).getAttribute('role'), 'option');
+    assert.ok(ov.querySelector('.ankibridge-deckempty'), '« Aucun résultat » reste affiché');
+  });
+  await ta('création : nom invalide expliqué, aucune option de création', async () => {
+    const ov = await openModal(deckServer(['Cours'], []));
+    for (const [query, why] of [['Cours "3"', /guillemets/], ['A::', /niveau/], ['x'.repeat(151), /trop long/]]) {
+      pickerOptions(ov, query);
+      assert.equal(createOption(ov), null, query);
+      assert.match(ov.querySelector('.ankibridge-deckinvalid').textContent, why);
+    }
+  });
+  await ta('création : confirmation dans la page, annuler n’écrit rien', async () => {
+    const log = [];
+    const ov = await openModal(deckServer(['Cours', 'Par défaut'], log));
+    pickerOptions(ov, 'Cardio::Cours 3');
+    createOption(ov).click();
+    await new Promise(r => setTimeout(r, 50));
+    const confirm = ov.querySelector('.ankibridge-confirm');
+    assert.ok(confirm, 'confirmation attendue');
+    assert.equal(confirm.querySelector('.ankibridge-confirmok').textContent, 'Créer le paquet');
+    assert.match(confirm.textContent, /« Cardio › Cours 3 » va être créé/);
+    assert.match(confirm.textContent, /paquet parent « Cardio » n’existe pas encore/);
+    confirm.querySelector('.ankibridge-cancel').onclick();
+    await new Promise(r => setTimeout(r, 100));
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'aucune création après annulation');
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Création annulée/);
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours', 'le champ réaffiche le paquet sélectionné');
+  });
+  await ta('création refusée par Anki : message clair, paquet courant conservé', async () => {
+    const log = [];
+    const respond = msg => msg.type === 'CREATE_DECK' ? { ok: false, error: 'Anki indisponible' } : deckServer(['Cours'], log)(msg);
+    const ov = await openModal(respond);
+    pickerOptions(ov, 'Nouveau');
+    createOption(ov).click();
+    await new Promise(r => setTimeout(r, 50));
+    ov.querySelector('.ankibridge-confirmok').onclick();
+    await new Promise(r => setTimeout(r, 200));
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Création impossible : Anki indisponible/);
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours');
+  });
+  await ta('création confirmée : liste rechargée, paquet sélectionné, comparaison relancée', async () => {
+    const log = [];
+    const decks = ['Cours', 'Cardio'];
+    const ov = await openModal(deckServer(decks, log));
+    pickerOptions(ov, 'Cardio :: Cours 3');
+    createOption(ov).click();
+    await new Promise(r => setTimeout(r, 50));
+    assert.match(ov.querySelector('.ankibridge-confirm').textContent, /rangé dans le paquet existant « Cardio »/);
+    ov.querySelector('.ankibridge-confirmok').onclick();
+    await new Promise(r => setTimeout(r, 900));
+    const created = log.filter(m => m.type === 'CREATE_DECK');
+    assert.equal(created.length, 1);
+    assert.equal(created[0].deck, 'Cardio::Cours 3', 'nom nettoyé transmis');
+    assert.equal(log.filter(m => m.type === 'DECKS').length, 2, 'liste des paquets rechargée');
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cardio › Cours 3', 'nouveau paquet sélectionné');
+    const analyses = log.filter(m => m.type === 'ANALYZE');
+    assert.equal(analyses[analyses.length - 1].deck, 'Cardio::Cours 3', 'comparaison relancée sur le nouveau paquet');
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false, 'import possible');
+    pickerOptions(ov, 'cardio::cours 3');
+    assert.equal(createOption(ov), null, 'le paquet créé fait désormais partie de la liste');
+  });
+  await ta('création au clavier : Entrée sur un nom inconnu ouvre la confirmation', async () => {
+    const log = [];
+    const ov = await openModal(deckServer(['Cours'], log));
+    const input = ov.querySelector('.ankibridge-deckinput');
+    input.value = 'Nouveau'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(ov.querySelector('.ankibridge-confirm'), 'confirmation attendue');
+    assert.ok(!log.some(m => m.type === 'CREATE_DECK'), 'rien n’est créé sans confirmation');
+  });
+
+  /* --- 1.6.0 : tag commun au lot --- */
+  await ta('tag du lot : mémorisé, normalisé, affiché dans le récapitulatif et envoyé', async () => {
+    const log = [];
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], storage: { batchTag: 'Ancien::Tag' } }, deckServer(['Cours'], log));
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const ov = hh.root.querySelector('.ankibridge-overlay');
+    const input = ov.querySelector('.ankibridge-taginput');
+    assert.equal(input.value, 'Ancien::Tag', 'tag de la dernière fois proposé');
+    const recap = () => ov.querySelector('.ankibridge-recap').textContent;
+    assert.match(recap(), /13 carte\(s\) → paquet « Cours » · tag du lot « Ancien::Tag »/);
+    input.value = ' Cardio::Cours 3 '; input.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.match(recap(), /tag du lot « Cardio::Cours_3 »/, 'tag normalisé dans le récapitulatif');
+    assert.match(ov.querySelector('.ankibridge-taghint').textContent, /Cardio::Cours_3/);
+    ov.querySelectorAll('.ankibridge-pick')[0].checked = false;
+    ov.querySelectorAll('.ankibridge-pick')[0].dispatchEvent(new Event('change', { bubbles: true }));
+    assert.match(recap(), /^Récapitulatif : 12 carte\(s\)/, 'récapitulatif suit la sélection');
+    ov.querySelector('.ankibridge-action').onclick();
+    await new Promise(r => setTimeout(r, 300));
+    const imp = log.find(m => m.type === 'IMPORT');
+    assert.equal(imp.batchTag, 'Cardio::Cours_3');
+    assert.equal(imp.cards.length, 12);
+    assert.equal(hh.storage.batchTag, 'Cardio::Cours_3', 'mémorisé pour la prochaine fois');
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /Tag du lot : Cardio::Cours_3/);
+  });
+  await ta('tag du lot vide : « sans tag du lot », rien d’ajouté', async () => {
+    const log = [];
+    const ov = await openModal(deckServer(['Cours'], log));
+    assert.equal(ov.querySelector('.ankibridge-taginput').value, '');
+    assert.match(ov.querySelector('.ankibridge-recap').textContent, /sans tag du lot/);
+    ov.querySelector('.ankibridge-action').onclick();
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(log.find(m => m.type === 'IMPORT').batchTag, '');
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -1226,6 +1604,10 @@ function startMockAnki2() {
               .some(x => firstField(x).toLowerCase() === firstField(n).toLowerCase()));
             break;
           case 'addNote': out.result = ++state.nextNote; break;
+          case 'multi': out.result = (prm.actions || []).map(a => {
+            state.actions.push('multi:' + a.action);
+            return a.action === 'addNote' ? { result: ++state.nextNote, error: null } : { result: null, error: 'unsupported action ' + a.action };
+          }); break;
           case 'updateNoteFields': {
             const id = prm.note?.id; const n = state.notes.get(id);
             if (!n) { out.error = 'note introuvable'; break; }
@@ -1245,7 +1627,7 @@ function startMockAnki2() {
 
 async function replaceTests() {
   const { server, state, port, add } = await startMockAnki2();
-  const { ctx, listeners, storage } = bgContext({ fetchImpl: globalThis.fetch });
+  const { ctx, listeners, storage } = bgContext({ fetchImpl: onlyMock(port) });
   storage.ankiPort = port;
   // Fixtures : une note par cas de test, jamais partagée entre tests.
   const nBasic = add('Basique', ['Question A', 'Réponse A'], 'Médecine (TEST)::Cardiologie');
@@ -1604,13 +1986,12 @@ function popupHarness(respond, opts = {}) {
           if (r && typeof r.then === 'function') r.then(cb); else cb(r);
         }
       },
-      storage: { local: { get: async () => ({ deck: opts.savedDeck === undefined ? 'Cours' : opts.savedDeck }), set: async () => {} } }
+      storage: { local: fakeStorage({ deck: opts.savedDeck === undefined ? 'Cours' : opts.savedDeck }) }
     }
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  load(ctx, 'cards.js');
-  load(ctx, 'popup.js');
+  for (const f of POPUP_SCRIPTS()) load(ctx, f);
   const $ = id => doc.querySelector('[id="' + id + '"]');
   return { ctx, doc, sent, tabMessages, $ };
 }
@@ -1891,6 +2272,19 @@ async function popupTests() {
       }
     }
   });
+  await ta('popup : le prompt décrit la mise en forme autorisée, sans lien ni HTML', async () => {
+    const { $, tabMessages } = popupHarness(popupOk());
+    await settle();
+    $('composePrompt').onclick();
+    await settle();
+    const prompt = tabMessages[0].msg.prompt;
+    for (const piece of ['**gras**', '*italique*', '`code`', '« - »', '« 1. »', '^texte^', '~texte~', '\\n dans le JSON']) {
+      assert.ok(prompt.includes(piece), 'mise en forme non annoncée : ' + piece);
+    }
+    assert.match(prompt, /Aucun lien, aucune image, aucune balise HTML/);
+    assert.match(prompt, /jamais à cheval sur ses accolades/);
+    assert.ok(!/Na\^|Ca\^|H~2~O/.test(prompt), 'exemples neutres, sans discipline');
+  });
   await ta('popup : l’exemple de secours est neutre et accepté par le parseur', async () => {
     const { $ } = popupHarness(popupOk());
     await settle();
@@ -1937,6 +2331,144 @@ async function popupTests() {
       assert.ok(/#analysis/.test(rule), `zone défilante hors du secours replié : ${rule.trim().slice(0, 60)}`);
     }
     assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(html), 'aucun émoji dans l’interface');
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * 8. Mise en forme des cartes (shared.js)                            *
+ * ------------------------------------------------------------------ */
+// Ancienne conversion (1.5.0), gardée ici comme référence de compatibilité.
+const legacyHtml = text => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll('\n', '<br>');
+// Les balises produites sont bien imbriquées et ne traversent jamais un {{c1::…}}.
+function wellNested(html) {
+  const stack = [];
+  const re = /<(\/?)([a-z]+)[^>]*>|\{\{c\d+::|\}\}/g;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[0].startsWith('{{')) stack.push('cloze');
+    else if (m[0] === '}}') { if (stack.pop() !== 'cloze') return false; }
+    else if (m[2] === 'br') continue;
+    else if (!m[1]) stack.push(m[2]);
+    else if (stack.pop() !== m[2]) return false;
+  }
+  return stack.length === 0;
+}
+function formatTests() {
+  const S = sharedContext();
+  const H = S.toAnkiHtml;
+  t('format : texte sans mise en forme identique à la 1.5 (échappement + <br>)', () => {
+    for (const x of ['Question simple ?', 'a < b & c > d "cité"', 'ligne 1\nligne 2\n\nligne 4', "l'apostrophe", '<script>alert(1)</script>', '', '5 - 3 = 2', 'x * y', '2^10 et 3^5', '~5 mg ou ~10 mg', 'Le {{c1::cœur}} pompe.', '{{c1::Parent::indice}}', '-5 °C', '1.5 g/L']) {
+      assert.equal(H(x), legacyHtml(x), JSON.stringify(x));
+      assert.equal(S.hasFormatting(x), false, JSON.stringify(x));
+    }
+  });
+  t('format : gras, italique, code', () => {
+    assert.equal(H('**gras** et *italique* et `code`'), '<b>gras</b> et <i>italique</i> et <code>code</code>');
+    assert.equal(H('*a **b** c*'), '<i>a <b>b</b> c</i>');
+    assert.equal(H('`**pas de gras**`'), '<code>**pas de gras**</code>', 'rien n’est interprété dans du code');
+    assert.equal(H('** pas gras **'), '** pas gras **', 'espaces intérieurs : texte brut');
+    assert.equal(H('**non fermé'), '**non fermé');
+  });
+  t('format : exposant et indice (Na^+^, Ca^2+^, H~2~O)', () => {
+    assert.equal(H('Na^+^'), 'Na<sup>+</sup>');
+    assert.equal(H('Ca^2+^ et 10^-3^ M'), 'Ca<sup>2+</sup> et 10<sup>-3</sup> M');
+    assert.equal(H('H~2~O et CO~2~'), 'H<sub>2</sub>O et CO<sub>2</sub>');
+    assert.equal(H('~~barré~~'), '~~barré~~', 'pas de barré');
+    assert.equal(H('x^a b^'), 'x^a b^', 'pas d’espace dans un exposant');
+  });
+  t('format : listes « - » et « 1. », retours à la ligne', () => {
+    assert.equal(H('Causes :\n- une\n- deux\nFin'), 'Causes :<ul><li>une</li><li>deux</li></ul>Fin');
+    assert.equal(H('1. un\n2. **deux**'), '<ol><li>un</li><li><b>deux</b></li></ol>');
+    assert.equal(H('3. trois\n4. quatre'), '<ol start="3"><li>trois</li><li>quatre</li></ol>');
+    assert.equal(H('Titre\n\n- a\n\nSuite'), 'Titre<ul><li>a</li></ul>Suite', 'lignes vides collées à la liste retirées');
+    assert.equal(H('- a\n1. b'), '<ul><li>a</li></ul><ol><li>b</li></ol>');
+  });
+  t('format : ni lien, ni image, ni HTML brut', () => {
+    assert.equal(H('[lien](https://exemple.test)'), '[lien](https://exemple.test)');
+    assert.equal(H('![img](x.png)'), '![img](x.png)');
+    assert.equal(H('**<img src=x onerror=alert(1)>**'), '<b>&lt;img src=x onerror=alert(1)&gt;</b>');
+    assert.equal(H('`<b>`'), '<code>&lt;b&gt;</code>');
+    assert.equal(H('^<i>^'), '<sup>&lt;i&gt;</sup>');
+    for (const x of ['<a href="javascript:alert(1)">x</a>', '**<script>**', '- <iframe>', '<svg onload=alert(1)>']) {
+      assert.ok(!/<(a|img|script|iframe|svg)\b/i.test(H(x)), x);
+    }
+  });
+  t('format : marqueurs {{c1::…}} intacts, y compris avec * ou ^', () => {
+    assert.equal(H('{{c1::Na^+^}} entre'), '{{c1::Na<sup>+</sup>}} entre');
+    assert.equal(H('**{{c1::cœur}}** pompe'), '<b>{{c1::cœur}}</b> pompe');
+    assert.equal(H('{{c1::a*b}} et c*d'), '{{c1::a*b}} et c*d', 'l’italique ne traverse pas le trou');
+    assert.equal(H('**{{c1::a** b}}'), '**{{c1::a** b}}', 'le gras ne coupe pas le trou');
+    assert.equal(H('{{c1::Ca^2+^::ion **divalent**}}'), '{{c1::Ca<sup>2+</sup>::ion **divalent**}}', 'indice laissé tel quel');
+    assert.equal(H('{{c1::a {{c2::*b*}} c}}'), '{{c1::a {{c2::<i>b</i>}} c}}', 'trous imbriqués');
+    assert.equal(H('- {{c1::un\n- deux}}'), '<ul><li>{{c1::un<br>- deux}}</li></ul>', 'un retour à la ligne dans un trou ne crée pas de liste');
+    assert.equal(H('{{c1::non fermé *a*'), '{{c1::non fermé <i>a</i>');
+  });
+  t('format : 2000 textes aléatoires -> balises bien imbriquées, trous intacts', () => {
+    let seed = 42;
+    const rnd = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const bits = ['**', '*', '^', '~', '`', 'a', 'Na', '+', '2', ' ', '\n', '- ', '1. ', '::', '<', '&', '"'];
+    const part = k => Array.from({ length: k }, () => bits[rnd(bits.length)]).join('');
+    for (let n = 0; n < 2000; n++) {
+      let text = '';
+      for (let k = rnd(6); k >= 0; k--) {
+        text += part(rnd(5));
+        if (rnd(2)) text += '{{c' + (1 + rnd(3)) + '::' + part(1 + rnd(4)).replaceAll('::', ':') + (rnd(3) ? '' : '::' + part(rnd(3)).replaceAll('::', '')) + '}}';
+      }
+      const html = H(text);
+      assert.ok(wellNested(html), 'imbrication invalide : ' + JSON.stringify(text) + ' -> ' + html);
+      const braces = x => x.replace(/[^{}]/g, '');
+      assert.equal(braces(html), braces(text), 'accolades modifiées : ' + JSON.stringify(text));
+      const clozes = x => (x.match(/\{\{c\d+::/g) || []).join('');
+      assert.equal(clozes(html), clozes(text), 'marqueur de trou modifié : ' + JSON.stringify(text));
+      assert.ok(!/<(?!\/?(b|i|code|sup|sub|ul|ol|li|br)\b)/.test(html), 'balise inattendue : ' + html);
+    }
+  });
+  t('format : texte brut pour les comparaisons (marqueurs retirés, trous gardés)', () => {
+    assert.equal(S.stripMarkdown('**Na^+^** et H~2~O'), 'Na+ et H2O');
+    assert.equal(S.stripMarkdown('Causes :\n- une\n1. deux'), 'Causes :\nune\ndeux');
+    assert.equal(S.stripMarkdown('{{c1::Ca^2+^::ion}}'), '{{c1::Ca2+::ion}}');
+    // Le texte d'Anki (HTML retiré) et la carte Markdown donnent la même base.
+    const card = '**Ion** Na^+^, H~2~O\n- un\n- deux';
+    assert.equal(S.htmlToText(H(card)).replace(/\s+/g, ' ').trim(), S.stripMarkdown(card).replace(/\s+/g, ' ').trim());
+  });
+  t('similarité : la mise en forme est ignorée', () => {
+    const ctx = { console }; ctx.globalThis = ctx; vm.createContext(ctx);
+    load(ctx, 'shared.js'); load(ctx, 'similarity.js');
+    const Sim = ctx.AnkiSimilarity;
+    assert.equal(Sim.normalize('**Rôle** de H~2~O et Na^+^ ?'), Sim.normalize('Rôle de H2O et Na+ ?'));
+    assert.equal(Sim.normalize('- un\n- deux'), Sim.normalize('un deux'));
+    // Note Anki lue par AnkiSearch (balises retirées) contre la même carte en Markdown.
+    const existing = [{ id: 1, fields: [{ text: 'Rôle de H2O et Na+ dans la cellule ?' }, { text: 'r' }] }];
+    const [r] = Sim.analyze([{ type: 'basic', front: 'Rôle de H~2~O et **Na^+^** dans la cellule ?', back: 'x' }], existing, [true]);
+    assert.equal(r.kind, 'similar');
+    assert.equal(r.matches[0].score, 1);
+  });
+  t('aperçu : DOM sûr (createElement / textContent), jamais de HTML interprété', () => {
+    const doc = { createElement: tag => new El(tag), createTextNode: x => new El('#text', {}, x) };
+    const box = new El('div');
+    S.renderInto(box, '**Na^+^** et `<img src=x onerror=alert(1)>`\n- {{c1::H~2~O::eau}}\n- *b*', doc);
+    assert.equal(box.querySelectorAll('img').length, 0, 'aucune image créée');
+    assert.equal(box.querySelector('b sup').textContent, '+');
+    assert.equal(box.querySelector('code').textContent, '<img src=x onerror=alert(1)>');
+    assert.equal(box.querySelectorAll('ul li').length, 2);
+    assert.equal(box.querySelector('.ankibridge-cloze sub').textContent, '2');
+    assert.match(box.querySelector('.ankibridge-clozehint').textContent, /indice : eau/);
+    assert.equal(box.querySelector('li i').textContent, 'b');
+    S.renderInto(box, 'texte\nsimple', doc);
+    assert.equal(box.querySelectorAll('br').length, 1, 'le contenu précédent est remplacé');
+  });
+  t('paquet : validation du nom à créer', () => {
+    const ok = x => S.validateDeckName(x);
+    assert.equal(ok('Cardio::Cours 3').name, 'Cardio::Cours 3');
+    assert.equal(ok('  Cardio :: Cours   3 ').name, 'Cardio::Cours 3');
+    assert.equal(ok('Cardio › Cours 3').name, 'Cardio::Cours 3', '« › » affiché accepté comme « :: »');
+    assert.equal(ok('x'.repeat(150)).ok, true);
+    for (const bad of ['', '  ', '::', 'A::', '::B', 'A::::B', 'x'.repeat(151), 'Cours "3"', 'Cours « 3 »', 'Cours “3”', 'a\u0007b']) {
+      assert.equal(ok(bad).ok, false, JSON.stringify(bad));
+      assert.ok(ok(bad).error, 'message attendu pour ' + JSON.stringify(bad));
+    }
+    assert.equal(S.sameDeck('Cours', 'cours'), true);
   });
 }
 
@@ -2000,6 +2532,42 @@ function manifestTests() {
         `${f}: chemin de compte, adresse électronique ou secret`);
     }
   });
+  t('chargement : shared.js en premier partout (page, popup, service worker)', () => {
+    const page = CONTENT_SCRIPTS();
+    assert.deepEqual(page, ['shared.js', 'cards.js', 'picker.js', 'review.js', 'content.js']);
+    assert.equal(POPUP_SCRIPTS()[0], 'shared.js');
+    assert.equal(BACKGROUND_SCRIPTS()[0], 'shared.js');
+    for (const f of [...page, ...POPUP_SCRIPTS(), ...BACKGROUND_SCRIPTS()]) assert.ok(fs.existsSync(EXT(f)), f + ' manquant');
+  });
+  t('content.js découpé : détection d’un côté, fenêtre de vérification de l’autre', () => {
+    const content = fs.readFileSync(EXT('content.js'), 'utf8');
+    assert.ok(!/function showModal|function createDeckPicker|function askConfirm/.test(content), 'la fenêtre ne vit plus dans content.js');
+    assert.match(fs.readFileSync(EXT('review.js'), 'utf8'), /async function showModal/);
+    assert.match(fs.readFileSync(EXT('picker.js'), 'utf8'), /function createDeckPicker/);
+    for (const f of ['content.js', 'picker.js', 'review.js']) {
+      const lines = fs.readFileSync(EXT(f), 'utf8').split('\n').length;
+      assert.ok(lines < 520, `${f} : ${lines} lignes`);
+    }
+  });
+  t('fonctions communes définies une seule fois (shared.js)', () => {
+    for (const f of ['content.js', 'picker.js', 'review.js', 'popup.js', 'background.js', 'search.js']) {
+      const src = fs.readFileSync(EXT(f), 'utf8');
+      assert.ok(!/(const|function)\s+(normText|deckLabel)\b\s*[=(]/.test(src), `${f} redéfinit normText ou deckLabel`);
+      assert.ok(!/replaceAll\('&', '&amp;'\)|replace\(\/&amp;\/gi/.test(src), `${f} réimplémente l’échappement HTML`);
+    }
+  });
+  t('aucun innerHTML ni insertion de HTML brut dans l’extension', () => {
+    for (const f of fs.readdirSync(EXT('')).filter(x => /\.js$/.test(x))) {
+      const src = fs.readFileSync(EXT(f), 'utf8');
+      assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser|createContextualFragment/.test(src), `${f} : insertion de HTML brut`);
+    }
+  });
+  t('écritures Anki limitées : addNote (via multi), updateNoteFields, createDeck', () => {
+    const src = fs.readFileSync(EXT('background.js'), 'utf8');
+    const actions = [...src.matchAll(/anki\('([a-zA-Z]+)'/g)].map(m => m[1]).concat([...src.matchAll(/action: '([a-zA-Z]+)'/g)].map(m => m[1]));
+    for (const a of actions) assert.ok(!/^(delete|remove|change|set|forget|suspend|clear)/i.test(a), 'action destructive : ' + a);
+    assert.ok(!/addNotes'/.test(src), 'addNotes (échec en bloc) non utilisé');
+  });
   t('aucune clé API / télémétrie dans les sources', () => {
     const files = fs.readdirSync(EXT('')).filter(f => /\.(js|html|json)$/.test(f));
     for (const f of files) {
@@ -2019,7 +2587,7 @@ function runnerVerdict({ fail, ranSections, expectedSections, declared, executed
   return { code: fail ? 1 : 0, reason: fail ? `${fail} test(s) en échec` : 'ok' };
 }
 
-const EXPECTED_SECTIONS = 7;
+const EXPECTED_SECTIONS = 8;
 const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 120000);
 let ranSections = 0;
 let suiteDone = false;
@@ -2040,6 +2608,7 @@ process.on('uncaughtException', e => { console.error('\nERREUR : exception non c
   console.log('\n=== 5. Manifeste et hygiène des sources ==='); manifestTests(); ranSections++;
   console.log('\n=== 6. Localisation et remplacement sûr ==='); await replaceTests(); ranSections++;
   console.log('\n=== 7. Popup : interface compacte ==='); await popupTests(); ranSections++;
+  console.log('\n=== 8. Mise en forme des cartes (shared.js) ==='); formatTests(); ranSections++;
   const verdict = runnerVerdict({ fail, ranSections, expectedSections: EXPECTED_SECTIONS, declared, executed: pass + fail });
   console.log(`\nRésultat : ${pass} réussis, ${fail} échoués` + (verdict.code ? ` — ${verdict.reason}` : ''));
   suiteDone = true; clearTimeout(watchdog);

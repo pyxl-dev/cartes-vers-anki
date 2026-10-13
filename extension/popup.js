@@ -76,8 +76,7 @@ $('autoPort').onclick=async()=>{
 let analyzed=null;
 const invalidate=()=>{ analyzed=null;$('import').disabled=true;$('analysis').replaceChildren(); };
 // Recherche de paquet : casse et accents ignorés, sur le chemin complet.
-const normText=s=>String(s??'').replace(/œ/gi,'oe').replace(/æ/gi,'ae').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-const deckLabel=d=>String(d).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+const {normText,deckLabel}=AnkiShared; // shared.js
 let allDecks=[];
 function fillDecks(list,{keepCurrent=true}={}){
   const current=$('deck').value;
@@ -215,7 +214,7 @@ function buildGeneralPrompt(count) {
 
 Exigences : une connaissance par carte ; formulation non ambiguë ; réponse concise ; privilégier les connaissances importantes du document. Respecte strictement les faits, chiffres, unités, noms et références du contenu, quel que soit le sujet traité. N’invente aucune information et n’ajoute aucune connaissance absente du contenu fourni. Évite les doublons dans ce lot.
 
-Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Si la réponse risque d’être trop longue pour un seul message, découpe-la en plusieurs blocs de code JSON complets, chacun au même format, plutôt que de couper une carte au milieu. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
+Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Si la réponse risque d’être trop longue pour un seul message, découpe-la en plusieurs blocs de code JSON complets, chacun au même format, plutôt que de couper une carte au milieu. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Mise en forme autorisée dans les textes des cartes, et seulement celle-ci : **gras**, *italique*, \`code\`, listes avec une ligne par élément commençant par « - » ou « 1. » (retour à la ligne écrit \\n dans le JSON), exposant ^texte^ et indice ~texte~ (par exemple x^2^ ou x~1~). Aucun lien, aucune image, aucune balise HTML. Une mise en forme peut se trouver à l’intérieur d’un trou {{c1::…}}, jamais à cheval sur ses accolades. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
 }
 $('composePrompt').onclick=async()=>{
   const btn=$('composePrompt');btn.disabled=true;

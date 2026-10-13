@@ -91,12 +91,15 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 3. Un bouton **« Ajouter N cartes à Anki »** apparaît automatiquement sous la réponse. Au-delà de 100 cartes, un bouton par **lot de 100** (« Lot 2 : ajouter les cartes 101 à 200 »).
 
    La lecture est **tolérante** : une carte mal formée est écartée seule (avec sa raison, listée dans la fenêtre de vérification) au lieu de bloquer tout le lot ; une réponse **coupée** par ChatGPT donne les cartes complètes, la dernière carte incomplète étant ignorée ; plusieurs blocs de code dans la même réponse sont **additionnés**.
-4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet.
+4. Cliquer dessus : la fenêtre de vérification liste les cartes, permet de les corriger et de choisir le paquet. À côté de chaque texte modifiable, un **aperçu mis en forme** montre la carte telle qu'elle apparaîtra dans Anki (gras, listes, exposants…), mis à jour à chaque frappe.
 5. La **comparaison se lance automatiquement** à l'ouverture (sur le dernier paquet utilisé) : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
 6. Changer de paquet dans la liste **relance la comparaison automatiquement** ; les conclusions du paquet précédent sont abandonnées et les cartes remises à l'état initial. Le bouton **« Relancer la comparaison »** reste disponible en secours.
-7. Cliquer **« Importer dans Anki »**. Les cartes déjà présentes ne sont jamais réimportées.
+7. Facultatif : remplir **« Tag du lot »** (par exemple `Cardio::Cours_3`). Ce tag est ajouté à **toutes** les cartes importées, en plus de leurs propres tags (il ne compte pas dans la limite de 8), et il est **mémorisé** pour la prochaine fois. Les espaces deviennent `_`, comme pour les autres tags.
+8. Vérifier le **récapitulatif** en bas de la fenêtre (« 87 carte(s) → paquet « Cardio › Cours 3 » · tag du lot « Cardio::Cours_3 » »), puis cliquer **« Importer dans Anki »**. Les cartes déjà présentes ne sont jamais réimportées. L'envoi à Anki est **groupé** (un seul appel pour tout le lot) ; une carte refusée par Anki n'empêche pas les autres et son numéro est indiqué.
 
 Le paquet de destination se **recherche** : taper tout ou partie du nom (la casse, les accents et les ligatures sont ignorés — `coeur` trouve `cœur`). Les résultats sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) alors que la valeur transmise reste le nom complet Anki `Parent::Enfant`. Un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**. Le sélecteur se pilote au clavier (flèches puis Entrée) ; taper ne relance pas la comparaison, seule une **sélection** le fait.
+
+**Créer un paquet sans quitter la page.** Si le nom tapé ne correspond exactement à aucun paquet, la dernière option de la liste propose **« Créer le paquet « X » »**. Les sous-paquets s'écrivent `Parent::Enfant` (ou `Parent › Enfant`). Une **confirmation** s'affiche dans la fenêtre (elle précise si le paquet parent sera créé aussi) ; **Annuler n'écrit rien**. Après création, la liste est rechargée, le nouveau paquet est sélectionné et la comparaison relancée. Les noms vides, de plus de 150 caractères ou contenant des guillemets sont refusés avec une explication. Seule l'action `createDeck` est utilisée : aucun paquet existant n'est modifié, et un paquet portant déjà ce nom (casse ignorée) n'est jamais recréé.
 
 **Sélection des cartes.** Chaque ligne porte une **case à cocher toujours visible**, y compris quand le détail est replié : cliquer la case sélectionne ou désélectionne la carte sans ouvrir la ligne ; cliquer le titre ou le chevron déplie le détail. Deux boutons font **« Tout sélectionner (cartes nouvelles) »** et **« Tout désélectionner »**, et un compteur indique en permanence le nombre de cartes retenues.
 
@@ -149,26 +152,42 @@ Règles appliquées carte par carte :
 | `back` (ou `answer`) | requis pour une carte basic — non vide, 8000 caractères max |
 | `text` | requis pour une carte cloze — doit contenir au moins un `{{c1::…}}` |
 | `extra` (ou `back`) | facultatif pour une carte cloze |
-| `tags` | facultatif — 8 tags conservés au maximum |
+| `tags` | facultatif — 8 tags conservés au maximum (le tag du lot s'ajoute en plus) |
 
+### Mise en forme des cartes
+
+Les textes des cartes acceptent un petit sous-ensemble de Markdown, converti en HTML Anki **après** échappement complet du texte :
+
+| Écrire | Résultat dans Anki |
+|---|---|
+| `**gras**`, `*italique*`, `` `code` `` | **gras**, *italique*, `code` |
+| `Na^+^`, `Ca^2+^`, `x^2^` | exposant (Na⁺, Ca²⁺, x²) |
+| `H~2~O`, `x~1~` | indice (H₂O, x₁) |
+| lignes commençant par `- ` | liste à puces |
+| lignes commençant par `1. `, `2. `… | liste numérotée |
+| retour à la ligne (`\n` dans le JSON) | retour à la ligne |
+
+Rien d'autre : ni lien, ni image, ni HTML brut (une balise écrite par ChatGPT reste du texte visible). Les marqueurs de texte à trous `{{c1::…}}` et `{{c1::…::indice}}` ne sont **jamais coupés** : une mise en forme peut être à l'intérieur d'un trou (`{{c1::Na^+^}}`), jamais à cheval sur ses accolades ; l'indice reste en texte simple. Un texte sans mise en forme donne exactement le même champ qu'avant la version 1.6.0.
 Autres contraintes :
 
 - **100 cartes par vérification / import.** Au-delà, la réponse est découpée automatiquement en lots de 100, chacun avec son bouton.
 - **Tags** : les espaces deviennent `_`, la hiérarchie Anki `Parent::Enfant` est conservée, ainsi que les lettres accentuées et ligatures (`cœur`).
-- Le **paquet de destination doit exister** dans Anki (l'extension ne crée pas de paquet).
+- Le **paquet de destination** doit exister dans Anki, ou être créé depuis la fenêtre de vérification (après confirmation).
 - Le type de note doit être **Basique / Basic** ou **Texte à trous / Cloze**. L'extension écrit dans les **deux premiers champs** du type de note : tester avec un type très personnalisé avant un usage réel.
 - Une carte invalide est refusée avec son numéro, sans bloquer les autres.
 
 ### Prompt prêt à l'emploi
 
-> À partir du cours ci-dessous, crée 20 cartes Anki de révision à long terme. Une seule connaissance testée par carte, question sans ambiguïté, réponse précise. N'invente aucune donnée absente du cours. Réponds uniquement par un bloc de code contenant du JSON valide, au format exact : `{"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["medecine"]},{"type":"cloze","text":"Le {{c1::métoprolol}} est …","extra":"Précision","tags":["medecine"]}]}`. Garde les marqueurs `{{c1::…}}` intacts.
+> À partir du cours ci-dessous, crée 20 cartes Anki de révision à long terme. Une seule connaissance testée par carte, question sans ambiguïté, réponse précise. N'invente aucune donnée absente du cours. Réponds uniquement par un bloc de code contenant du JSON valide, au format exact : `{"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["medecine"]},{"type":"cloze","text":"Le {{c1::métoprolol}} est …","extra":"Précision","tags":["medecine"]}]}`. Garde les marqueurs `{{c1::…}}` intacts. Mise en forme autorisée : `**gras**`, `*italique*`, `` `code` ``, listes « - » ou « 1. », exposant `^texte^` et indice `~texte~` ; aucun lien, aucune image, aucun HTML.
+
+Le bouton **« Préparer dans ChatGPT »** du popup insère une version générique de ce prompt (toutes matières), qui annonce la même mise en forme.
 
 ## Doublons
 
 Deux contrôles complémentaires, tous deux exécutés **avant** l'ajout :
 
-- **Doublons exacts** — action `canAddNotes` d'AnkiConnect, portée **collection entière**, plus les répétitions internes au lot. Re-contrôle à l'insertion. Les cartes concernées sont décochées et jamais réimportées.
-- **Formulations proches** — comparaison **lexicale locale** (pas d'IA) des questions et réponses dans le paquet choisi et ses sous-paquets, plafonnée à 20 000 notes. L'interface indique explicitement si l'analyse est partielle. Ces cartes sont décochées par précaution et signalées « à vérifier » : deux questions proches peuvent tester deux faits différents.
+- **Doublons exacts** — action `canAddNotes` d'AnkiConnect, portée **collection entière**, plus les répétitions internes au lot. Re-contrôle à l'insertion. Les cartes concernées sont décochées et jamais réimportées. Le contrôle porte sur le champ **mis en forme**, exactement celui qui sera écrit : une carte reformatée à l'identique reste un doublon.
+- **Formulations proches** — comparaison **lexicale locale** (pas d'IA) des questions et réponses dans le paquet choisi et ses sous-paquets, plafonnée à 20 000 notes. La mise en forme est ignorée (`H~2~O` et `H<sub>2</sub>O` se comparent comme `H2O`). L'interface indique explicitement si l'analyse est partielle. Ces cartes sont décochées par précaution et signalées « à vérifier » : deux questions proches peuvent tester deux faits différents.
 
 Changer de paquet relance la comparaison : un import ne peut jamais s'appuyer sur les conclusions d'un autre paquet ni sur une analyse devenue obsolète (résultat périmé ignoré, import désactivé tant que la comparaison en cours n'a pas abouti).
 
@@ -203,7 +222,10 @@ Autres points :
 ## Limites connues
 
 - **100 cartes maximum par import** : au-delà, l'extension propose un bouton par lot de 100.
-- Le paquet de destination doit déjà exister ; l'extension ne crée ni paquet ni type de note.
+- L'extension ne crée pas de type de note. Elle ne crée un paquet que depuis la fenêtre de vérification, après confirmation explicite.
+- Mise en forme volontairement limitée : pas de liste imbriquée (une ligne indentée reste un élément du même niveau), pas de titre, de tableau, de lien ni d'image. Comme en Markdown, `a*b*c` met `b` en italique : écrire `a × b × c` ou utiliser `` `code` `` pour un astérisque littéral.
+- Une carte importée **avant la 1.6.0** avec des marqueurs visibles (`**mot**` écrit en clair) n'est pas un doublon exact de la même carte désormais mise en forme : elle est signalée « Formulation similaire » et décochée par précaution.
+- Un changement **uniquement** de mise en forme n'est pas proposé comme remplacement d'une note existante (le texte est identique).
 - La détection automatique du bouton dépend de la structure HTML de ChatGPT.com. Elle est vérifiée sur le DOM courant (`[data-dil-source-message-id]` pour le message de l'assistant, `[data-user-message-bubble]` pour le message de l'utilisateur), avec l'ancien sélecteur `[data-message-author-role]` conservé en secours. Si le site change encore, le **mode de secours par collage** reste opérationnel.
 - L'import se fait dans un navigateur de bureau (Brave/Chrome/Edge) ; AnkiConnect n'est pas joignable depuis un navigateur mobile.
 - Les modèles Anki très personnalisés ne sont pas détectés automatiquement : l'extension utilise les deux premiers champs.
@@ -211,18 +233,22 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 165 tests
+node tests/test.cjs          # extension : 209 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-165 tests hors navigateur, sans réseau externe :
+209 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
 
 - lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;
 - port AnkiConnect : validation `1..65535`, identification d'un vrai AnkiConnect, refus d'un JSON étranger / d'une page HTML / d'un objet sans version, ordre de sondage 8765 → 8766, priorité du choix manuel, aucune écriture envoyée pendant la sonde ;
 - import réel contre un **faux AnkiConnect** en boucle locale : ajout de 100 cartes, réimport → 0 ajoutée + 100 doublons, doublon interne au lot, cloze, refus au-delà de 100, paquet inconnu, contrôle d'origine des messages ;
+- import groupé : un seul appel `multi`, échec partiel (cartes refusées numérotées, les autres ajoutées), erreur globale → repli carte par carte avec re-contrôle des doublons (jamais de double écriture) ;
+- mise en forme : compatibilité exacte avec la 1.5 pour un texte simple, gras / italique / code / exposant / indice / listes, aucun lien ni HTML, marqueurs `{{c1::…}}` intacts (y compris sur 2000 textes aléatoires), doublon reconnu après mise en forme, similarité insensible à la mise en forme, aperçu construit en DOM sûr ;
+- création de paquet (`CREATE_DECK`) : sous-paquets, paquet existant jamais recréé, noms invalides refusés sans écriture, origine contrôlée ; dans la fenêtre : option en dernière position, confirmation, annulation sans écriture, rechargement, sélection et comparaison relancée ;
+- tag du lot : normalisé, ajouté en plus des 8 tags, mémorisé, affiché dans le récapitulatif ;
 - `content.js` avec un DOM simulé : bouton « Ajouter N cartes à Anki » créé dans le bon conteneur, jamais sur le message de l'utilisateur, pas de doublon de bouton après re-balayage, ancien DOM pris en charge, ouverture de la fenêtre, message neutre quand toutes les cartes existent déjà, import envoyé pour des cartes neuves ;
-- cohérence du manifeste (version, permissions minimales, aucune URL distante, aucun motif de secret).
+- cohérence du manifeste (version, permissions minimales, aucune URL distante, aucun motif de secret), ordre de chargement (`shared.js` en premier partout), aucune insertion de HTML brut, aucune action Anki destructive.
 
 **Ce que les tests ne couvrent pas :** le site ChatGPT.com réel (le DOM du test est une reproduction), Anki lui-même (le serveur est simulé), et l'accessibilité avec un lecteur d'écran.
 
@@ -232,8 +258,11 @@ Le kit macOS est testé séparément, dans un bac à sable jetable : `HOME` temp
 
 ```
 extension/      extension chargeable (manifest.json à la racine de ce dossier)
+  shared.js     fonctions communes (recherche, libellés, tags, échappement, mise en forme)
   cards.js      analyse et validation du JSON des cartes
-  content.js    détection du bloc JSON sur la page + fenêtre de vérification
+  content.js    détection du bloc JSON sur la page ChatGPT + boutons d'import
+  picker.js     sélecteur de paquet (avec création) et confirmation dans la page
+  review.js     fenêtre de vérification : aperçu, tag du lot, comparaison, import
   background.js appels AnkiConnect (service worker MV3), résolution du port
   search.js     lecture des notes existantes (contexte et recherche)
   similarity.js comparaison lexicale locale (formulations proches)

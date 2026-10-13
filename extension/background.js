@@ -1,5 +1,5 @@
 'use strict';
-importScripts('search.js', 'similarity.js');
+importScripts('shared.js', 'search.js', 'similarity.js');
 const DEFAULT_PORT = 8765;
 function validatedPort(value) {
   const raw = typeof value === 'number' ? String(value) : String(value ?? '').trim();
@@ -139,29 +139,11 @@ async function anki(action, params = {}) {
     return await ankiOnce(retried, action, params);
   }
 }
-function plainToHtml(text) {
-  return String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll('\n','<br>');
-}
-/* Tags Anki : pas d'espace. On garde lettres (y compris œ, æ, grec…), chiffres,
-   « _ », « - » et la hiérarchie « Parent::Enfant » utilisée par beaucoup de
-   paquets partagés. Un « : » isolé ou en bord de tag est retiré. */
-function normalizeTag(s) {
-  return String(s).trim().replace(/\s+/g, '_')
-    .replace(/[^\p{L}\p{N}_\-:]/gu, '')
-    .replace(/:{3,}/g, '::').replace(/(^|[^:]):(?!:)/g, '$1').replace(/^:+|:+$/g, '')
-    .slice(0, 100);
-}
-/* Anki range du HTML dans les champs. Pour comparer deux contenus (clé de doublon,
-   détection de dérive depuis l'analyse) on retire les balises et on normalise les
-   espaces : c'est la même base que la détection de doublon d'Anki sur le premier champ. */
-function fieldPlain(text) {
-  return String(text ?? '')
-    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:div|p|li|tr)>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&amp;/gi, '&');
-}
+/* Texte de carte → champ Anki : échappement complet, puis mise en forme limitée
+   (gras, italique, code, listes, exposant, indice). Voir shared.js. */
+function fieldHtml(text) { return AnkiShared.toAnkiHtml(text); }
+function normalizeTag(s) { return AnkiShared.normalizeTag(s); }
+function fieldPlain(text) { return AnkiShared.htmlToText(text); }
 function normalizeField(text) {
   return fieldPlain(text).replace(/\s+/g, ' ').trim();
 }
@@ -203,10 +185,45 @@ async function findModel(type, available) {
   if (!Array.isArray(fields) || fields.length < 2) throw new Error(`Le modèle ${model} doit avoir au moins 2 champs.`);
   return {model, fields};
 }
-async function importCards(deckName, cards) {
+/* Résultat d'une sous-action de « multi ». AnkiConnect (version 6) renvoie
+   {result, error} pour chacune ; les très anciennes versions renvoient la valeur
+   brute. Une erreur sur UNE note n'interrompt jamais les autres. */
+function multiEntry(entry) {
+  if (entry && typeof entry === 'object' && !Array.isArray(entry) &&
+      Object.prototype.hasOwnProperty.call(entry, 'result') && Object.prototype.hasOwnProperty.call(entry, 'error')) {
+    return entry.error ? {error: String(entry.error)} : {id: entry.result};
+  }
+  return {id: entry};
+}
+/* Écriture groupée : un seul appel « multi » contenant un addNote par carte, au
+   lieu d'un aller-retour par carte. addNotes n'est pas utilisé : ses versions
+   récentes refusent tout le lot dès qu'une seule note est rejetée.
+   Si « multi » échoue en bloc (erreur globale d'AnkiConnect, délai dépassé…), on
+   ne sait pas ce qui a été écrit : les doublons sont donc recontrôlés AVANT le
+   repli carte par carte, pour ne jamais compter ni tenter deux fois la même note. */
+async function addPrepared(prepared) {
+  if (!prepared.length) return [];
+  let entries = null;
+  try {
+    const raw = await anki('multi', {actions: prepared.map(p => ({action: 'addNote', version: 6, params: {note: p.note}}))});
+    if (Array.isArray(raw) && raw.length === prepared.length) entries = raw.map(multiEntry);
+  } catch { entries = null; }
+  if (entries) return entries;
+  const still = await anki('canAddNotes', {notes: prepared.map(p => p.note)});
+  const out = [];
+  for (let k = 0; k < prepared.length; k++) {
+    if (!still?.[k]) { out.push({skipped: true}); continue; }
+    try { out.push({id: await anki('addNote', {note: prepared[k].note})}); }
+    catch (e) { out.push({error: String(e?.message || e)}); }
+  }
+  return out;
+}
+async function importCards(deckName, cards, batchTag = '') {
   if (!Array.isArray(cards) || !cards.length || cards.length > 100) throw new Error('Import limité à 1–100 cartes par lot.');
+  // Tag commun au lot : ajouté à chaque carte EN PLUS de ses 8 tags au maximum.
+  const lotTag = normalizeTag(typeof batchTag === 'string' ? batchTag.slice(0, 200) : '');
   const decks = await anki('deckNames');
-  if (!decks.includes(deckName)) throw new Error('Paquet introuvable. Crée-le dans Anki puis actualise la liste.');
+  if (!decks.includes(deckName)) throw new Error('Paquet introuvable. Crée-le depuis la fenêtre de vérification ou dans Anki, puis actualise la liste.');
   const models = await anki('modelNames');
   const types = [...new Set(cards.map(c => c.type))];
   const modelMap = {};
@@ -229,9 +246,10 @@ async function importCards(deckName, cards) {
       const {model,fields} = modelMap[c.type];
       const fieldsObj = {};
       for (const field of fields) fieldsObj[field] = '';
-      fieldsObj[fields[0]] = plainToHtml(content);
-      fieldsObj[fields[1]] = plainToHtml(c.type === 'cloze' ? c.extra || '' : c.back || '');
-      const tags = [...new Set(['chatgpt', ...(Array.isArray(c.tags) ? c.tags : [])].map(normalizeTag).filter(Boolean))];
+      fieldsObj[fields[0]] = fieldHtml(content);
+      fieldsObj[fields[1]] = fieldHtml(c.type === 'cloze' ? c.extra || '' : c.back || '');
+      const own = (Array.isArray(c.tags) ? c.tags : []).filter(x => typeof x === 'string').slice(0, 8);
+      const tags = [...new Set(['chatgpt', ...own].map(normalizeTag).concat(lotTag).filter(Boolean))];
       // Même règle de doublon que la vérification : collection entière, tous modèles.
       const note = {deckName, modelName: model, fields: fieldsObj, tags,
         options: {allowDuplicate: false, duplicateScope: 'collection', duplicateScopeOptions: {checkAllModels: true}}};
@@ -243,21 +261,40 @@ async function importCards(deckName, cards) {
   }
   // 2) Un seul contrôle de doublons pour tout le lot (au lieu d'un appel par carte).
   const canAdd = prepared.length ? await anki('canAddNotes', {notes: prepared.map(p => p.note)}) : [];
-  // 3) Écriture carte par carte : une erreur sur une carte n'empêche pas les autres.
-  for (let k = 0; k < prepared.length; k++) {
-    const {i, note} = prepared[k];
-    if (!canAdd?.[k]) { result.skipped++; continue; }
-    try {
-      const id = await anki('addNote', {note});
-      if (id === null || id === undefined) throw new Error('Anki a refusé cette carte.');
-      result.added++;
-    } catch (e) {
-      result.errors.push(`Carte ${i + 1} : ${e.message || e}`);
-      if (result.errors.length >= 12) { result.errors.push('Trop d’erreurs, import interrompu.'); break; }
-    }
-  }
+  // 3) Écriture groupée des seules cartes acceptées ; chaque carte garde son
+  //    propre résultat (ajoutée, doublon ou erreur numérotée).
+  const toAdd = prepared.filter((_, k) => canAdd?.[k]);
+  result.skipped += prepared.length - toAdd.length;
+  const outcomes = await addPrepared(toAdd);
+  let hidden = 0;
+  outcomes.forEach((o, k) => {
+    if (o.skipped) { result.skipped++; return; }
+    const error = o.error || (o.id === null || o.id === undefined ? 'Anki a refusé cette carte.' : '');
+    if (!error) { result.added++; return; }
+    if (result.errors.length < 12) result.errors.push(`Carte ${toAdd[k].i + 1} : ${error}`);
+    else hidden++;
+  });
+  if (hidden) result.errors.push(`… et ${hidden} autre(s) erreur(s).`);
+  if (lotTag) result.batchTag = lotTag;
   lastIndex = null;
   return result;
+}
+
+/* Création d'un paquet depuis la fenêtre de vérification, après confirmation
+   explicite dans la page. Seule écriture possible : createDeck. Un paquet déjà
+   présent (même nom, casse ignorée) n'est jamais recréé. */
+async function createDeck(rawName) {
+  const check = AnkiShared.validateDeckName(rawName);
+  if (!check.ok) throw new Error(check.error);
+  const decks = await anki('deckNames');
+  const existing = (Array.isArray(decks) ? decks : []).find(d => AnkiShared.sameDeck(d, check.name));
+  if (existing) return {deck: existing, created: false};
+  await anki('createDeck', {deck: check.name});
+  const after = await anki('deckNames');
+  const made = (Array.isArray(after) ? after : []).find(d => AnkiShared.sameDeck(d, check.name));
+  if (!made) throw new Error('Anki n’a pas confirmé la création du paquet.');
+  lastIndex = null;
+  return {deck: made, created: true};
 }
 
 // Prévisualisation de doublons avant import. Contrôle natif exact : collection entière.
@@ -296,9 +333,14 @@ async function locateExact(firstFieldText, modelName, {fresh = false} = {}) {
   const key = modelName + '\u0000' + plain;
   const hit = fresh ? null : locateCache.get(key);
   if (hit && Date.now() - hit.time < 60_000) return hit.value;
+  // Recherche Anki sur le plus long passage SANS balise : une carte mise en forme
+  // (« Na<sup>+</sup> ») est retrouvée que la recherche porte sur le HTML brut ou
+  // sur le texte. La preuve d'identité reste la comparaison complète ci-dessous.
+  const term = String(firstFieldText ?? '').split(/<[^>]*>/).map(normalizeField)
+    .reduce((best, part) => (part.length > best.length ? part : best), '') || plain;
   let value;
   try {
-    const ids = await anki('findNotes', {query: quotedQuery(plain)});
+    const ids = await anki('findNotes', {query: quotedQuery(term)});
     if (!Array.isArray(ids) || !ids.length) value = {matches: [], searched: true};
     else if (ids.length > MAX_LOCATE_CANDIDATES) {
       // Trop de candidats pour les examiner TOUS : l'unicité ne peut pas être
@@ -361,7 +403,7 @@ async function analyzeCards(deck,cards) {
     if(!source.trim() || (c.type==='basic'&&!value2.trim()))throw new Error('Une carte contient un champ requis vide.');
     const {model,fields}=modelMap[c.type];
     const fieldMap=Object.fromEntries(fields.map(f=>[f,'']));
-    fieldMap[fields[0]]=plainToHtml(source);fieldMap[fields[1]]=plainToHtml(value2);
+    fieldMap[fields[0]]=fieldHtml(source);fieldMap[fields[1]]=fieldHtml(value2);
     return {deckName:deck,modelName:model,fields:fieldMap,
       options:{allowDuplicate:false,duplicateScope:'collection',duplicateScopeOptions:{checkAllModels:true}}};
   });
@@ -409,7 +451,8 @@ async function analyzeCards(deck,cards) {
     }
     locatedCount++;
     const first=cards[i].type==='cloze'?cards[i].text:cards[i].front;
-    const res=await locateExact(first, modelMap[cards[i].type].model);
+    // Même champ que celui envoyé à Anki (mis en forme), pas le texte Markdown brut.
+    const res=await locateExact(fieldHtml(first), modelMap[cards[i].type].model);
     const duplicates=res.matches;
     if(!duplicates.length){
       items.push({kind:'exact',duplicates:[],replaceable:false,
@@ -502,7 +545,7 @@ async function replaceNotes(replacements) {
       if (sameModel.length > 1) {
         throw new Error(`Plusieurs notes identiques (${sameModel.length}) partagent ce premier champ : remplacement refusé, précise la note dans Anki.`);
       }
-      const wanted = [item?.first, item?.second].map(v => plainToHtml(String(v ?? '')));
+      const wanted = [item?.first, item?.second].map(v => fieldHtml(String(v ?? '')));
       if (type === 'cloze') {
         const before = clozeIndices(fieldPlain(fields[0].text)).join(',');
         const after = clozeIndices(fieldPlain(wanted[0])).join(',');
@@ -591,7 +634,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'SEARCH': return await searchNotes(message.deck,message.term,message.offset);
       case 'ANALYZE': return await analyzeCards(message.deck,message.cards);
       case 'PING': return await anki('version');
-      case 'IMPORT': return await importCards(message.deck, message.cards);
+      case 'IMPORT': return await importCards(message.deck, message.cards, message.batchTag);
+      case 'CREATE_DECK': return await createDeck(message.deck);
       case 'REPLACE': return await replaceNotes(message.replacements);
       default: throw new Error('Action non autorisée.');
     }
