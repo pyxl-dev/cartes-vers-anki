@@ -1,0 +1,141 @@
+# Publie l'extension sur le Chrome Web Store quand un tag de version est poussé.
+#
+#   1. Monter "version" dans extension/manifest.json (ex. 1.5.0) et fusionner sur main.
+#   2. git tag v1.5.0 && git push origin v1.5.0
+#
+# Le workflow vérifie que le tag correspond au manifeste, lance les tests, construit
+# le .zip, l'envoie au Chrome Web Store (API v2) et le soumet à l'examen de Google.
+# Une fois approuvée, la version est installée automatiquement chez les utilisateurs
+# par Chrome / Brave / Edge (mise à jour native du navigateur).
+#
+# Configuration (une seule fois) : voir docs/PUBLICATION.md
+name: Publication Chrome Web Store
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Soumettre à l'examen après l'envoi (sinon : envoi du brouillon seulement)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # création de la release GitHub avec le .zip
+  id-token: write   # authentification Google sans clé (Workload Identity Federation)
+
+concurrency:
+  group: chrome-web-store
+  cancel-in-progress: false
+
+env:
+  CWS_API: https://chromewebstore.googleapis.com
+  PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+  EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: chrome-web-store
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Vérifier la configuration
+        run: |
+          test -n "$PUBLISHER_ID" || { echo "::error::Variable CWS_PUBLISHER_ID manquante (Settings → Secrets and variables → Actions → Variables)"; exit 1; }
+          test -n "$EXTENSION_ID" || { echo "::error::Variable CWS_EXTENSION_ID manquante"; exit 1; }
+
+      - name: Lire la version du manifeste
+        id: version
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$VERSION" ]; then
+            echo "::error::Le tag ${GITHUB_REF_NAME} ne correspond pas à la version du manifeste ($VERSION)."
+            exit 1
+          fi
+
+      - name: Tests
+        run: node tests/test.cjs
+
+      - name: Construire le paquet
+        id: zip
+        run: |
+          ZIP="cartes-vers-anki-${{ steps.version.outputs.version }}.zip"
+          (cd extension && zip -r -X "../$ZIP" . -x '.*' -x '__MACOSX/*')
+          unzip -l "$ZIP"
+          echo "file=$ZIP" >> "$GITHUB_OUTPUT"
+
+      # Authentification : sans clé (recommandé) si les variables WIF sont définies,
+      # sinon avec la clé JSON du compte de service stockée en secret.
+      - name: Authentification Google (sans clé)
+        if: ${{ vars.GCP_WIF_PROVIDER != '' }}
+        id: auth_wif
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+
+      - name: Authentification Google (clé JSON)
+        if: ${{ vars.GCP_WIF_PROVIDER == '' }}
+        id: auth_key
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+
+      - name: Envoyer le paquet au Chrome Web Store
+        env:
+          TOKEN: ${{ steps.auth_wif.outputs.access_token || steps.auth_key.outputs.access_token }}
+          ZIP: ${{ steps.zip.outputs.file }}
+        run: |
+          set -euo pipefail
+          BASE="$CWS_API/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID"
+          RESP=$(curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -T "$ZIP" \
+            "$CWS_API/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload")
+          echo "$RESP" | jq .
+          STATE=$(echo "$RESP" | jq -r '.uploadState // empty')
+          # Traitement asynchrone : on attend la fin (2 minutes maximum).
+          for i in $(seq 1 24); do
+            [ "$STATE" = "IN_PROGRESS" ] || break
+            sleep 5
+            STATE=$(curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$BASE:fetchStatus" | jq -r '.lastAsyncUploadState // empty')
+            echo "Traitement en cours… ($STATE)"
+          done
+          if [ "$STATE" != "SUCCEEDED" ]; then
+            echo "::error::Envoi refusé ou non terminé (état : ${STATE:-inconnu}). La version du manifeste doit être supérieure à celle déjà publiée."
+            exit 1
+          fi
+
+      - name: Soumettre à l'examen et publier
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        env:
+          TOKEN: ${{ steps.auth_wif.outputs.access_token || steps.auth_key.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          BASE="$CWS_API/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID"
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}' "$BASE:publish" | jq .
+          echo "--- État après soumission ---"
+          curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$BASE:fetchStatus" | jq .
+          echo "Soumis à l'examen de Google. La version sera publiée automatiquement une fois approuvée." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Release GitHub avec le .zip
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.zip.outputs.file }}" \
+            --title "Cartes vers Anki $GITHUB_REF_NAME" --generate-notes

@@ -146,7 +146,12 @@ $('sample').onclick=()=>{
 $('review').onclick=async()=>{
   $('review').disabled=true; invalidate();
   try{
-    const cards=AnkiCards.toCards($('json').value);
+    // Lecture tolérante : une carte mal formée est écartée, pas tout le lot.
+    const parsed=AnkiCards.parse($('json').value);
+    if(!parsed.cards.length)throw new Error(parsed.rejected[0]?.reason||'Aucune carte reconnue. Format attendu : {"cards":[{"front":"...","back":"..."}]}');
+    if(parsed.cards.length>AnkiCards.MAX_CARDS)throw new Error(`${parsed.cards.length} cartes : colle-les par lots de ${AnkiCards.MAX_CARDS} au maximum (ou utilise les boutons de lot dans ChatGPT).`);
+    const cards=parsed.cards;
+    const skippedNote=(parsed.rejected.length?`${parsed.rejected.length} carte(s) mal formée(s) ignorée(s) : ${parsed.rejected.slice(0,3).map(r=>r.reason).join(' ; ')}. `:'')+(parsed.truncated?'JSON coupé : dernière carte incomplète ignorée. ':'');
     const deck=$('deck').value;
     if(!deck)throw new Error('Sélectionne un paquet Anki.');
     feedback(`Recherche des cartes existantes pour « ${deck} »…`);
@@ -176,7 +181,7 @@ $('review').onclick=async()=>{
     });
     const exact=report.items.filter(x=>x.kind==='exact').length;
     const similar=report.items.filter(x=>x.kind==='similar').length;
-    feedback(`${report.totalExisting} notes existantes, ${report.scanned} comparées : ${exact} doublon(s) exact(s), ${similar} ressemblance(s).`+
+    feedback(skippedNote+`${report.totalExisting} notes existantes, ${report.scanned} comparées : ${exact} doublon(s) exact(s), ${similar} ressemblance(s).`+
       (report.partial?' Analyse de similarité PARTIELLE (plus de 20 000 notes).':'')+
       '\nLes ressemblances lexicales sont seulement des alertes ; vérifie que les informations sont identiques.');
     $('import').disabled=false;
@@ -210,13 +215,13 @@ function buildGeneralPrompt(count) {
 
 Exigences : une connaissance par carte ; formulation non ambiguë ; réponse concise ; privilégier les connaissances importantes du document. Respecte strictement les faits, chiffres, unités, noms et références du contenu, quel que soit le sujet traité. N’invente aucune information et n’ajoute aucune connaissance absente du contenu fourni. Évite les doublons dans ce lot.
 
-Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
+Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Si la réponse risque d’être trop longue pour un seul message, découpe-la en plusieurs blocs de code JSON complets, chacun au même format, plutôt que de couper une carte au milieu. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
 }
 $('composePrompt').onclick=async()=>{
   const btn=$('composePrompt');btn.disabled=true;
   try {
     const count=Number($('cardCount').value);
-    if(![10,20,30,50].includes(count))throw new Error('Nombre de cartes non valide.');
+    if(![10,20,30,50,100].includes(count))throw new Error('Nombre de cartes non valide.');
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     if(!tab?.id)throw new Error('Aucun onglet actif.');
     const response=await new Promise((resolve,reject)=>{

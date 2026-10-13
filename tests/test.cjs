@@ -62,6 +62,54 @@ function parserTests() {
   });
   t('contenu > 8000 caractères refusé', () => assert.throws(() => A.toCards(JSON.stringify({ cards: [{ front: 'x'.repeat(8001), back: 'b' }] })), /trop long/));
   t('carte non-objet refusée', () => assert.throws(() => A.toCards('{"cards":["nope"]}'), /invalide/));
+
+  /* --- Lecture tolérante (parse) : ce que ChatGPT affiche réellement --- */
+  t('parse : JSON complet -> toutes les cartes, rien d’écarté', () => {
+    const r = A.parse(json(12));
+    assert.equal(r.cards.length, 12); assert.equal(r.rejected.length, 0); assert.equal(r.truncated, false);
+  });
+  t('parse : une carte invalide n’empêche pas les 99 autres', () => {
+    const items = basic(100); items[41] = { type: 'cloze', text: 'sans trou' };
+    const r = A.parse(JSON.stringify({ cards: items }));
+    assert.equal(r.cards.length, 99); assert.equal(r.rejected.length, 1);
+    assert.match(r.rejected[0].reason, /Carte 42 : cloze sans/);
+  });
+  t('parse : réponse coupée au milieu d’une carte -> cartes complètes récupérées', () => {
+    const full = JSON.stringify({ cards: basic(60) });
+    const cut = full.slice(0, full.indexOf('"Q58"') + 3);   // coupé dans la 58e carte
+    const r = A.parse(cut);
+    assert.equal(r.cards.length, 57); assert.equal(r.truncated, true);
+    assert.equal(r.cards[56].front, 'Q57');
+  });
+  t('parse : réponse coupée puis reprise dans un 2e bloc -> recollée', () => {
+    const full = JSON.stringify({ cards: basic(30) });
+    const at = full.indexOf('"Q17"') + 2;
+    const r = A.parse([full.slice(0, at), full.slice(at)].join(''));   // comme codeText() de content.js
+    assert.equal(r.cards.length, 30);
+    assert.equal(A.parse(full.slice(0, at)).cards.length, 16, 'le 1er bloc seul ne donne que 16 cartes');
+  });
+  t('parse : plusieurs blocs JSON complets à la suite -> fusionnés', () => {
+    const r = A.parse(json(50) + '\n' + JSON.stringify({ cards: basic(50).map(c => ({ ...c, front: c.front + 'b' })) }));
+    assert.equal(r.cards.length, 100);
+  });
+  t('parse : plus de 100 cartes acceptées, découpées en lots de 100', () => {
+    const r = A.parse(json(230));
+    assert.equal(r.cards.length, 230);
+    assert.equal(JSON.stringify(A.chunks(r.cards).map(l => [l.from, l.to, l.cards.length])), '[[1,100,100],[101,200,100],[201,230,30]]');
+  });
+  t('parse : accolades et guillemets dans le texte des cartes ne trompent pas le découpage', () => {
+    const tricky = [{ front: 'Que vaut {x} dans "f(x)" ?', back: 'Un } isolé \\ et "guillemets"' }, { type: 'cloze', text: 'Le {{c1::cœur}} pompe.' }];
+    const full = JSON.stringify({ cards: tricky });
+    const r = A.parse(full.slice(0, -2));                    // fermeture manquante
+    assert.equal(r.cards.length, 2);
+    assert.equal(r.cards[0].back, 'Un } isolé \\ et "guillemets"');
+  });
+  t('parse : du code ordinaire ne produit aucune carte', () => {
+    for (const code of ['function f(){ return {a:1}; }', '{"name":"pkg","version":"1.0.0"}', 'ceci n’est pas du JSON', '']) {
+      const r = A.parse(code);
+      assert.equal(r.cards.length, 0, code);
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -225,6 +273,20 @@ async function integrationTests() {
   await ta('IMPORT : réimport des 100 -> 0 ajoutée, 100 doublons', async () => {
     const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: cards(100) });
     assert.equal(r.value.added, 0); assert.equal(r.value.skipped, 100);
+  });
+  await ta('tags : hiérarchie « :: » et lettres comme œ conservées', async () => {
+    assert.equal(ctx.normalizeTag('Cardio::Item 221'), 'Cardio::Item_221');
+    assert.equal(ctx.normalizeTag('cœur'), 'cœur');
+    assert.equal(ctx.normalizeTag('a:b'), 'ab');
+    assert.equal(ctx.normalizeTag('::a:::b::'), 'a::b');
+    assert.equal(ctx.normalizeTag('<script>'), 'script');
+  });
+  await ta('IMPORT : un seul canAddNotes pour tout le lot', async () => {
+    const before = state.actions.filter(a => a === 'canAddNotes').length;
+    const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: basic(30).map(c => ({ ...c, front: c.front + '-lot', tags: [] })) });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.value.added, 30);
+    assert.equal(state.actions.filter(a => a === 'canAddNotes').length - before, 1);
   });
   await ta('IMPORT : doublon interne au lot -> 1 ajoutée / 1 ignorée', async () => {
     const r = await send(listeners, { type: 'IMPORT', deck: 'Cours', cards: [{ type: 'basic', front: 'X', back: '1' }, { type: 'basic', front: 'X', back: '1' }] });
@@ -513,6 +575,45 @@ async function contentTests() {
     await new Promise(r => setTimeout(r, 400));
     assert.ok(sent.includes('IMPORT'), 'IMPORT attendu');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /13 ajoutée\(s\)/);
+  });
+
+  /* --- Lots de 100 cartes depuis un PDF --- */
+  await ta('une carte mal formée n’efface plus le bouton : 99 cartes proposées, 1 signalée', async () => {
+    const items = basic(100); items[9] = { type: 'cloze', text: 'pas de trou' };
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON.stringify({ cards: items })))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    assert.equal(root.querySelector('.ankibridge-btn').textContent, 'Ajouter 99 cartes à Anki');
+    assert.match(root.querySelector('.ankibridge-parsenote').textContent, /1 carte mal formée ignorée/);
+    root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 200));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal(ov.querySelectorAll('.ankibridge-card').length, 99);
+    assert.match(ov.querySelector('.ankibridge-rejected').textContent, /Carte 10 : cloze sans/);
+  });
+  await ta('230 cartes : 3 boutons de lot, chacun ouvre son lot', async () => {
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, json(230)))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    const btns = root.querySelectorAll('.ankibridge-btn');
+    assert.equal(JSON.stringify(btns.map(b => b.textContent)), JSON.stringify(['Lot 1 : ajouter les cartes 1 à 100', 'Lot 2 : ajouter les cartes 101 à 200', 'Lot 3 : ajouter les cartes 201 à 230']));
+    btns[2].click();
+    await new Promise(r => setTimeout(r, 200));
+    const ov = root.querySelector('.ankibridge-overlay');
+    assert.equal(ov.querySelectorAll('.ankibridge-card').length, 30);
+    assert.match(ov.querySelector('h2').textContent, /lot 201–230/);
+  });
+  await ta('réponse coupée : bouton proposé avec les cartes complètes et un avertissement', async () => {
+    const full = json(40);
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, full.slice(0, full.indexOf('"Q31"') + 4)))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    assert.equal(root.querySelector('.ankibridge-btn').textContent, 'Ajouter 30 cartes à Anki');
+    assert.match(root.querySelector('.ankibridge-parsenote').textContent, /réponse incomplète/);
+  });
+  await ta('deux blocs de code dans la même réponse : cartes additionnées', async () => {
+    const second = JSON.stringify({ cards: basic(20).map(c => ({ ...c, front: c.front + '-bis' })) });
+    const { root } = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, json(50))), h('p', {}, 'suite'), h('pre', {}, h('code', {}, second))] }, respondOk([]));
+    await new Promise(r => setTimeout(r, 700));
+    assert.equal(countButtons(root), 1);
+    assert.equal(root.querySelector('.ankibridge-btn').textContent, 'Ajouter 70 cartes à Anki');
   });
 
   /* --- régression PR #1 : courses entre analyse, édition et fermeture de la fenêtre --- */
@@ -1548,7 +1649,7 @@ async function popupTests() {
     await settle();
     assert.equal(doc.querySelectorAll('button.primary').length, 1, 'une seule action principale');
     assert.equal($('composePrompt').textContent, 'Préparer dans ChatGPT');
-    assert.deepEqual($('cardCount').querySelectorAll('option').map(o => o.getAttribute('value')), ['10', '20', '30', '50']);
+    assert.deepEqual($('cardCount').querySelectorAll('option').map(o => o.getAttribute('value')), ['10', '20', '30', '50', '100']);
     assert.equal($('cardCount').value, '20', '20 cartes par défaut');
     assert.equal(doc.querySelectorAll('.hint').length, 1, 'une seule ligne d’aide');
     // Le libellé de l'action ne doit pas être répété (titre + bouton).
@@ -1764,7 +1865,7 @@ async function popupTests() {
     }
   });
   await ta('popup : le prompt est générique et n’impose aucune discipline', async () => {
-    for (const n of [10, 20, 30, 50]) {
+    for (const n of [10, 20, 30, 50, 100]) {
       const { $, tabMessages } = popupHarness(popupOk());
       await settle();
       $('cardCount').value = String(n);
@@ -1842,7 +1943,8 @@ async function popupTests() {
 function manifestTests() {
   const mf = JSON.parse(fs.readFileSync(EXT('manifest.json'), 'utf8'));
   t('manifeste MV3', () => assert.equal(mf.manifest_version, 3));
-  t('version 1.4.3', () => assert.equal(mf.version, '1.4.3'));
+  // La version exacte est vérifiée à la publication (tag vX.Y.Z = manifeste) : ici, seulement le format.
+  t('version au format X.Y.Z', () => assert.match(mf.version, /^\d+\.\d+\.\d+$/));
   t('permission d’hôte limitée à la boucle locale, tous ports', () => assert.deepEqual(mf.host_permissions, ['http://127.0.0.1/*']));
   t('permissions minimales (storage seul)', () => assert.deepEqual(mf.permissions, ['storage']));
   t('aucune permission large', () => assert.ok(!JSON.stringify(mf).includes('<all_urls>')));
