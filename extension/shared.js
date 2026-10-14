@@ -503,10 +503,39 @@
     return text.join('\n');
   }
 
+  /* Après une mise à jour de l'extension (Chrome Web Store), les onglets ChatGPT
+     déjà ouverts gardent l'ancien script, qui a perdu le lien avec l'extension :
+     chaque appel échoue avec « Extension context invalidated » ou « Receiving end
+     does not exist ». On traduit ces erreurs en une consigne claire. */
+  const RELOAD_MESSAGE = 'L’extension vient d’être mise à jour : recharge la page ChatGPT (⌘R ou Ctrl+R) pour continuer. Tes cartes restent dans la conversation.';
+  function isStaleContext(error) {
+    return /context invalidated|receiving end does not exist|could not establish connection|message port closed/i.test(String(error?.message ?? error ?? ''));
+  }
+  function friendlyError(error) {
+    return isStaleContext(error) ? RELOAD_MESSAGE : String(error?.message ?? error ?? '');
+  }
+  /* Appel au service worker depuis une page (fenêtre de vérification) : rejette
+     avec une erreur { stale: true } portant RELOAD_MESSAGE quand l'onglet a perdu
+     le lien avec l'extension (l'appel peut alors lever de façon synchrone). */
+  function callExtension(type, extra = {}) {
+    const stale = () => Object.assign(new Error(RELOAD_MESSAGE), {stale: true});
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage({type, ...extra}, res => {
+          const err = chrome.runtime.lastError;
+          if (err) return reject(isStaleContext(err) ? stale() : new Error(err.message));
+          if (!res?.ok) return reject(new Error(res?.error || 'Connexion indisponible'));
+          resolve(res.value);
+        });
+      } catch (e) { reject(isStaleContext(e) ? stale() : e); }
+    });
+  }
+
   root.AnkiShared = Object.freeze({
     normText, deckLabel, validateDeckName, sameDeck, normalizeTag, MAX_DECK_NAME,
     escapeHtml, htmlToText,
     toAnkiHtml, stripMarkdown, hasFormatting, renderInto, parseFormatting: parse,
-    clozesOf, splitAnswer, answerError, setClozeAnswer, setClozeNumber, removeCloze, addCloze, readableTitle, domToMarkdown
+    clozesOf, splitAnswer, answerError, setClozeAnswer, setClozeNumber, removeCloze, addCloze, readableTitle, domToMarkdown,
+    isStaleContext, friendlyError, callExtension, RELOAD_MESSAGE
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

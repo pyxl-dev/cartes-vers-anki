@@ -248,7 +248,14 @@ $('composePrompt').onclick=async()=>{
     });
     if(!response?.ok)throw new Error(response?.error||'Éditeur ChatGPT non trouvé.');
     feedback('Demande insérée dans ChatGPT. Envoie-la : le bouton « Ajouter à Anki » apparaîtra sous les cartes.','ok');
-  }catch(e){feedback(`Ouvre chatgpt.com dans cet onglet, puis réessaie. (${e.message})`,'error');}
+  }catch(e){
+    // « Receiving end does not exist » : soit l'onglet n'est pas ChatGPT, soit il a
+    // été ouvert AVANT une mise à jour de l'extension et n'a pas le nouveau script.
+    // Sans permission « tabs », l'URL de l'onglet n'est pas lisible : on dit les deux.
+    feedback(AnkiShared.isStaleContext(e)
+      ?'Ouvre chatgpt.com dans cet onglet. S’il est déjà ouvert, recharge la page (⌘R ou Ctrl+R) : elle date d’avant la dernière mise à jour de l’extension.'
+      :`Ouvre chatgpt.com dans cet onglet, puis réessaie. (${e.message})`,'error');
+  }
   finally{btn.disabled=false;}
 };
 

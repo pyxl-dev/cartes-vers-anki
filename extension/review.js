@@ -5,19 +5,14 @@
    Ouverte par content.js (bouton sous la réponse de ChatGPT). Tout le contenu
    venant de ChatGPT ou d'Anki est inséré avec textContent, jamais comme du HTML. */
 (() => {
-  const {deckLabel, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
+  const {deckLabel, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle, callExtension: api, RELOAD_MESSAGE} = AnkiShared;
   const {richEditor} = AnkiRich;
-  const {createDeckPicker, askConfirm, themeControl, busy, el} = AnkiPicker;
+  const {createDeckPicker, deckSync, askConfirm, themeControl, busy, el} = AnkiPicker;
   // Durée minimale de l'état « en cours » : même si Anki répond instantanément,
   // le clic produit un retour visible.
   const MIN_BUSY_MS = 300;
-  const api = (type, extra={}) => new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({type,...extra}, res => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      if (!res?.ok) return reject(new Error(res?.error || 'Connexion indisponible'));
-      resolve(res.value);
-    });
-  });
+  // Message d'erreur affiché : la consigne de rechargement remplace tout préfixe.
+  const errorText = (prefix, e) => (e?.stale ? RELOAD_MESSAGE : `${prefix}${e?.message ?? e}`);
   /* Le texte lu dans Anki (balises retirées, espaces réduits) et la carte saisie
      (Markdown) sont comparés sur la même base que le service worker : un simple
      changement de mise en forme n'est donc pas annoncé comme un remplacement. */
@@ -68,7 +63,7 @@
     const main = el('div','ankibridge-main');
     const control = el('div','ankibridge-control');
     control.append(el('span','ankibridge-decklabel','Paquet Anki :'));
-    const picker = createDeckPicker([], name => onDeckSelected(name), {onCreate: name => onCreateDeck(name)});
+    const picker = createDeckPicker([], name => onDeckSelected(name), {onCreate: name => onCreateDeck(name), onOpen: () => refreshDecks()});
     const analyze = el('button','ankibridge-review','Relancer la comparaison');
     analyze.type='button'; analyze.disabled=true;
     control.append(picker.root, analyze); top.append(control);
@@ -354,7 +349,7 @@
       } catch(e){
         if(!alive()||token!==analysisSeq)return;
         verified=false;
-        msg.textContent=`Comparaison impossible : ${e.message} — clique sur « Relancer la comparaison ».`;
+        msg.textContent=e?.stale?RELOAD_MESSAGE:`Comparaison impossible : ${e.message} — clique sur « Relancer la comparaison ».`;
       }
       finally{
         if(alive()&&token===analysisSeq){
@@ -396,10 +391,16 @@
         ?`Paquet « ${deckLabel(target)} » créé dans Anki. Comparaison en cours…`
         :`Le paquet « ${deckLabel(target)} » existait déjà : il est sélectionné. Comparaison en cours…`);
     };
+    // Liste des paquets relue à l'ouverture de la liste et au retour sur l'onglet (picker.js).
+    const sync=deckSync({api,picker,alive,onNames:n=>{deckNames=n;},onStale:()=>{msg.textContent=RELOAD_MESSAGE;},
+      onMissing:chosen=>{verified=false;save.disabled=true;replaceBtn.disabled=true;
+        msg.textContent=`Le paquet « ${deckLabel(chosen)} » n’existe plus dans Anki (renommé ou supprimé ?) : choisis un autre paquet ou recrée-le.`;}});
+    const refreshDecks=o=>sync.refresh(o);
     foot.append(msg,replaceBtn,save);dialog.append(foot); overlay.append(dialog); document.body.append(overlay);
     // Fermer la fenêtre abandonne l'analyse en vol : sans cela, une comparaison
     // lancée juste avant la fermeture continuerait de coûter des appels Anki.
-    const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);theme.stop();overlay.remove();};
+    const closeModal=()=>{closed=true;analysisSeq++;verified=false;clearTimeout(debounceTimer);theme.stop();
+      sync.stop();overlay.remove();};
     overlay.addEventListener('click',e=>{if(e.target===overlay) closeModal();});
     const esc=(e)=>{if(e.key==='Escape'){closeModal();document.removeEventListener('keydown',esc);}};
     document.addEventListener('keydown',esc);
@@ -408,6 +409,7 @@
       if(!alive())return;                 // fenêtre fermée pendant le chargement des paquets
       deckNames=Array.isArray(names)?names:[];
       picker.setNames(deckNames);
+      sync.start();
       const saved=await chrome.storage.local.get('deck');
       if(!alive())return;
       if(!names.length)throw new Error('Aucun paquet Anki disponible : tape un nom dans « Paquet Anki » pour en créer un.');
@@ -415,7 +417,7 @@
       lastAnalyzedDeck=picker.value;
       analyze.disabled=false;
       runAnalysis();            // comparaison automatique dès l'ouverture de la fenêtre
-    } catch(e){if(alive())msg.textContent=`Erreur : ${e.message}`;}
+    } catch(e){if(alive())msg.textContent=errorText('Erreur : ',e);}
     // Remplacement : liste sélectionnée explicitement, aperçu affiché, confirmation
     // obligatoire. Annuler ne déclenche AUCUNE écriture.
     replaceBtn.onclick=async()=>{
@@ -464,7 +466,7 @@
         verified=false; save.disabled=true; replaceBtn.disabled=true;
         analyze.disabled=false;
         setStale();
-      }catch(e){busy(replaceBtn,false);msg.textContent=`Erreur : ${e.message}`;replaceBtn.disabled=!verified;}
+      }catch(e){busy(replaceBtn,false);msg.textContent=errorText('Erreur : ',e);replaceBtn.disabled=!verified;}
     };
     save.onclick=async()=>{
       try {
@@ -496,7 +498,7 @@
         verified=false;
         analyze.disabled=false;
         setStale();
-      }catch(e){busy(save,false);msg.textContent=`Erreur : ${e.message}`;save.disabled=false;analyze.disabled=false;}
+      }catch(e){busy(save,false);msg.textContent=errorText('Erreur : ',e);save.disabled=false;analyze.disabled=false;}
     };
     updateCount();
   }

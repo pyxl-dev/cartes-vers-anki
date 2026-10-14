@@ -104,6 +104,10 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
 Le paquet de destination se **recherche** : taper tout ou partie du nom (la casse, les accents et les ligatures sont ignorés — `coeur` trouve `cœur`). Les résultats sont affichés par niveaux (`Cardiologie › Item 221 › Sous-item`) alors que la valeur transmise reste le nom complet Anki `Parent::Enfant`. Un paquet parent et ses sous-paquets se choisissent dans la même liste, et l'analyse porte sur le paquet choisi **et ses sous-paquets**. Le sélecteur se pilote au clavier (flèches puis Entrée) ; taper ne relance pas la comparaison, seule une **sélection** le fait.
 
+**Liste des paquets toujours à jour, sans recharger la page.** Un paquet créé (ou renommé) dans Anki pendant que la fenêtre est ouverte apparaît dès qu'on rouvre la liste ou qu'on revient sur l'onglet ChatGPT : la liste est relue dans Anki à ces deux moments (un seul appel local, au plus toutes les 2,5 s, jamais en tâche de fond). Le paquet choisi n'est jamais changé en silence : s'il a été supprimé ou renommé dans Anki, l'import est bloqué et un message invite à en choisir un autre.
+
+**Après une mise à jour de l'extension**, un onglet ChatGPT ouvert avant la mise à jour garde l'ancien script : au lieu d'une erreur technique, l'extension affiche « L'extension vient d'être mise à jour : recharge la page ChatGPT ». Les cartes restent dans la conversation.
+
 **Choisir ou créer un paquet.** Cliquer le champ sélectionne le nom affiché et ouvre la liste : taper le **remplace** et filtre (Échap ou un clic ailleurs réaffichent le paquet choisi). Quand le nom tapé n'existe pas, la dernière option propose **« + Créer le paquet « X » »** : un petit formulaire s'ouvre sous le champ et indique ce qui sera créé (et si le paquet parent le sera aussi) ; rien n'est écrit avant le clic sur **« Créer le paquet »**. Les sous-paquets s'écrivent `Parent::Enfant` (ou `Parent › Enfant`). Les noms vides, de plus de 150 caractères ou contenant des guillemets sont refusés avec une explication. Seule l'action `createDeck` est utilisée : aucun paquet existant n'est modifié, et un paquet portant déjà ce nom (casse ignorée) est simplement choisi. Après création, la liste est rechargée, le nouveau paquet est sélectionné et la comparaison relancée.
 
 **Sélection des cartes.** Chaque ligne porte une **case à cocher toujours visible**, y compris quand le détail est replié : cliquer la case sélectionne ou désélectionne la carte sans ouvrir la ligne ; cliquer le titre ou le chevron déplie le détail. Deux boutons font **« Tout sélectionner (cartes nouvelles) »** et **« Tout désélectionner »**, et un compteur indique en permanence le nombre de cartes retenues.
@@ -239,11 +243,11 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 238 tests
+node tests/test.cjs          # extension : 244 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-238 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
+244 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
 
 - lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;

@@ -628,6 +628,7 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours', 
 
   const body = h('body');
   root.append(body);
+  const windowListeners = {};
   const documentListeners = {};
   const storage = { deck: savedDeck, ...initial };
   const doc = {
@@ -637,7 +638,7 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours', 
     querySelectorAll: s => root.querySelectorAll(s),
     querySelector: s => root.querySelector(s),
     addEventListener: (t, f) => { (documentListeners[t] = documentListeners[t] || []).push(f); },
-    removeEventListener: () => {}
+    removeEventListener: (t, f) => { documentListeners[t] = (documentListeners[t] || []).filter(x => x !== f); }
   };
   const listeners = [];
   const observers = [];
@@ -647,7 +648,9 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours', 
     // display piloté par l'attribut data-display des fixtures (grille / flex / bloc)
     getComputedStyle: node => ({ display: (node && node._attrs && node._attrs['data-display']) || 'block' }),
     // getSelection remplaçable par un test (sélection simulée dans l'éditeur de trous).
-    window: { selection: null, getSelection() { return this.selection || { removeAllRanges() {}, addRange() {}, rangeCount: 0, isCollapsed: true }; } },
+    window: { selection: null, getSelection() { return this.selection || { removeAllRanges() {}, addRange() {}, rangeCount: 0, isCollapsed: true }; },
+      addEventListener: (t, f) => { (windowListeners[t] = windowListeners[t] || []).push(f); },
+      removeEventListener: (t, f) => { windowListeners[t] = (windowListeners[t] || []).filter(x => x !== f); } },
     HTMLElement: class {}, HTMLTextAreaElement: class {},
     chrome: {
       runtime: {
@@ -662,7 +665,7 @@ function contentHarness({ assistantBody, userBody, legacy, savedDeck = 'Cours', 
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   for (const f of CONTENT_SCRIPTS()) load(ctx, f);
-  return { ctx, root, body, listeners, observers, documentListeners, storage };
+  return { ctx, root, body, listeners, observers, documentListeners, windowListeners, storage };
 }
 const countButtons = root => root.querySelectorAll('.ankibridge-btn').length;
 const JSON13 = JSON.stringify({ cards: [...basic(10), { type: 'cloze', text: 'Le {{c1::GLOOP}} fabrique.', extra: '' }, { type: 'cloze', text: 'Le {{c1::ZORK}} sert.', extra: '' }, { type: 'cloze', text: 'Le GLOOP fait {{c1::42 blops}}.', extra: '' }] });
@@ -1703,6 +1706,74 @@ async function contentTests() {
   const panelOf = ov => ov.querySelector('.ankibridge-newdeck');
   const openCreate = (ov, name) => { pickerOptions(ov, name); createOption(ov).click(); };
   const typeName = (ov, name) => { const x = ov.querySelector('.ankibridge-newdeckname'); x.value = name; x.dispatchEvent(new Event('input', { bubbles: true })); };
+  /* --- Liste des paquets à jour sans recharger la page (paquet créé dans Anki pendant que la fenêtre est ouverte) --- */
+  const liveDecks = async (decks, { throwOn } = {}) => {
+    const calls = { DECKS: 0 };
+    const respond = msg => {
+      calls[msg.type] = (calls[msg.type] || 0) + 1;
+      if (throwOn && throwOn(msg)) throw new Error('Extension context invalidated.');
+      if (msg.type === 'DECKS') return { ok: true, value: decks.slice() };
+      return respondOk(Array.from({ length: 13 }, () => ({ kind: 'new' })))(msg);
+    };
+    const hx = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, JSON13))], savedDeck: 'Cours' }, respond);
+    // Horloge avançable : la relecture est limitée à une toutes les 2,5 s.
+    let offset = 0; const RealDate = Date;
+    hx.ctx.Date = class extends RealDate { static now() { return RealDate.now() + offset; } };
+    await new Promise(r => setTimeout(r, 700));
+    hx.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    return { ...hx, calls, ov: hx.root.querySelector('.ankibridge-overlay'), later: ms => { offset += ms; } };
+  };
+  await ta('paquet créé dans Anki fenêtre ouverte : visible à l’ouverture de la liste, sans recharger', async () => {
+    const decks = ['Cours', 'Par défaut'];
+    const { ov, calls, later } = await liveDecks(decks);
+    assert.equal(calls.DECKS, 1);
+    decks.push('Pharmaco::Antibiotiques');
+    later(3000);
+    ov.querySelector('.ankibridge-deckinput').dispatchEvent(new Event('focus'));
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(calls.DECKS, 2, 'liste relue à l’ouverture');
+    const values = ov.querySelectorAll('.ankibridge-deckoption').map(o => o.getAttribute('data-value'));
+    assert.ok(values.includes('Pharmaco::Antibiotiques'), 'nouveau paquet proposé : ' + values.join(', '));
+    assert.equal(ov.querySelector('.ankibridge-deckinput').value, 'Cours', 'le paquet choisi ne change pas');
+  });
+  await ta('retour sur l’onglet : liste relue, au plus une fois toutes les 2,5 s', async () => {
+    const decks = ['Cours'];
+    const { calls, later, windowListeners, documentListeners } = await liveDecks(decks);
+    assert.equal((windowListeners.focus || []).length, 1, 'écoute du retour sur la fenêtre');
+    assert.equal((documentListeners.visibilitychange || []).length, 1, 'écoute du retour sur l’onglet');
+    windowListeners.focus[0]();
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(calls.DECKS, 1, 'trop tôt : pas de nouvel appel');
+    later(3000); windowListeners.focus[0]();
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(calls.DECKS, 2, 'relue au retour');
+    windowListeners.focus[0](); documentListeners.visibilitychange[0]();
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(calls.DECKS, 2, 'pas de rafale d’appels');
+  });
+  await ta('paquet choisi supprimé ou renommé dans Anki : import bloqué avec un message clair', async () => {
+    const decks = ['Cours', 'Par défaut'];
+    const { ov, later, windowListeners } = await liveDecks(decks);
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, false, 'import possible avant');
+    decks.splice(0, 1);
+    later(3000); windowListeners.focus[0]();
+    await new Promise(r => setTimeout(r, 80));
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /« Cours » n’existe plus dans Anki/);
+    assert.equal(ov.querySelector('.ankibridge-action').disabled, true, 'import bloqué');
+  });
+  await ta('fenêtre fermée : plus aucune relecture des paquets', async () => {
+    const { ov, windowListeners, documentListeners } = await liveDecks(['Cours']);
+    ov.querySelector('.ankibridge-close').click();
+    assert.equal((windowListeners.focus || []).length, 0);
+    assert.equal((documentListeners.visibilitychange || []).length, 0);
+  });
+  await ta('onglet ouvert avant une mise à jour de l’extension : consigne de rechargement', async () => {
+    const { ov } = await liveDecks(['Cours'], { throwOn: msg => msg.type === 'DECKS' });
+    assert.match(ov.querySelector('.ankibridge-msg').textContent, /vient d’être mise à jour : recharge la page ChatGPT/);
+    assert.ok(!/context invalidated/i.test(ov.querySelector('.ankibridge-msg').textContent), 'pas de message technique');
+  });
+
   await ta('champ paquet : Échap ou un clic ailleurs réaffichent le paquet choisi', async () => {
     const ov = await openModal(deckServer(['Cours', 'Par défaut'], []));
     const input = ov.querySelector('.ankibridge-deckinput');
@@ -2937,6 +3008,14 @@ function formatTests() {
     assert.equal(md('a', h('br')), 'a', 'bouche-trou final ignoré');
     assert.equal(md('Na', h('sup', {}, '+ et plus')), 'Na^+^ ^et^ ^plus^', 'exposant avec espaces : jamais de ^ visible dans Anki');
     assert.equal(H(md('Na', h('sup', {}, '+ et plus'))), 'Na<sup>+</sup> <sup>et</sup> <sup>plus</sup>');
+  });
+  t('erreurs « extension mise à jour » reconnues et traduites', () => {
+    const S = sharedContext();
+    for (const m of ['Extension context invalidated.', 'Could not establish connection. Receiving end does not exist.', 'The message port closed before a response was received.'])
+      assert.equal(S.isStaleContext(new Error(m)), true, m);
+    assert.equal(S.isStaleContext(new Error('Anki ne répond pas')), false);
+    assert.match(S.friendlyError(new Error('Extension context invalidated.')), /recharge la page ChatGPT/);
+    assert.equal(S.friendlyError(new Error('Paquet introuvable')), 'Paquet introuvable');
   });
   t('paquet : validation du nom à créer', () => {
     const ok = x => S.validateDeckName(x);

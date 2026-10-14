@@ -24,7 +24,7 @@
        parent le sera aussi) ; rien n'est écrit avant le clic sur « Créer le
        paquet ». onCreate(nom) est appelé à ce moment et peut échouer : l'erreur
        s'affiche dans le formulaire. */
-  function createDeckPicker(names, onChoose, {onCreate = null} = {}) {
+  function createDeckPicker(names, onChoose, {onCreate = null, onOpen = null} = {}) {
     let pool = Array.isArray(names) ? names : [];
     const root = el('div','ankibridge-combo');
 
@@ -131,10 +131,16 @@
       if (opts[active]) input.setAttribute('aria-activedescendant', opts[active].getAttribute('id') || '');
       else input.removeAttribute('aria-activedescendant');
     }
+    // Requête affichée : vide tant que le champ montre le paquet choisi (liste complète).
+    const currentQuery = () => (input.value === deckLabel(current) ? '' : input.value);
     function open(query) {
+      const wasHidden = list.hidden;
       list.hidden = false;
       input.setAttribute('aria-expanded','true');
-      paint(query === undefined ? (input.value === deckLabel(current) ? '' : input.value) : query);
+      paint(query === undefined ? currentQuery() : query);
+      // À chaque ouverture de la liste : l'appelant peut relire les paquets d'Anki
+      // (un paquet créé dans Anki pendant que la fenêtre est ouverte apparaît alors).
+      if (wasHidden && onOpen) { try { onOpen(); } catch (_) { /* jamais bloquant */ } }
     }
     function close({restore = false} = {}) {
       list.hidden = true;
@@ -237,9 +243,45 @@
       root, input, close, openPanel,
       get value() { return current; },
       setValue(name) { current = name; input.value = deckLabel(name); close(); },
-      setNames(next) { pool = Array.isArray(next) ? next : []; }
+      // Nouvelle liste de paquets : si la liste est ouverte, elle est redessinée sur
+      // place (même recherche), sans fermer ni changer le paquet choisi.
+      setNames(next) {
+        pool = Array.isArray(next) ? next : [];
+        if (!list.hidden) { const keep = active; paint(currentQuery()); if (keep >= 0 && keep < shown.length) { active = keep; highlight(); } }
+      }
     };
   }
+  /* Liste des paquets toujours à jour, sans recharger la page : relue dans Anki
+     à l'ouverture de la liste et au retour sur l'onglet (on vient souvent de créer
+     un paquet dans Anki). Un seul appel local, limité à un toutes les
+     `minInterval` ms ; aucune lecture à intervalle régulier. Le paquet choisi
+     n'est jamais changé en silence : s'il a disparu, onMissing(nom) est appelé. */
+  function deckSync({api, picker, alive, onNames, onMissing, onStale, minInterval = 2500}) {
+    let last = 0, running = null, ready = false;
+    function refresh({force = false} = {}) {
+      if (!alive() || !ready) return Promise.resolve();
+      if (running) return running;
+      if (!force && Date.now() - last < minInterval) return Promise.resolve();
+      last = Date.now();
+      running = api('DECKS').then(names => {
+        if (!alive() || !Array.isArray(names)) return;
+        onNames?.(names);
+        picker.setNames(names);
+        const chosen = picker.value;
+        if (chosen && !names.includes(chosen)) onMissing?.(chosen);
+      }).catch(e => { if (alive() && e?.stale) onStale?.(e); })   // Anki fermé : la liste connue reste affichée
+        .finally(() => { running = null; });
+      return running;
+    }
+    const onReturn = () => { if (document.visibilityState !== 'hidden') refresh(); };
+    return {
+      refresh,
+      // À appeler une fois la première liste chargée.
+      start() { ready = true; last = Date.now(); window.addEventListener?.('focus', onReturn); document.addEventListener?.('visibilitychange', onReturn); },
+      stop() { window.removeEventListener?.('focus', onReturn); document.removeEventListener?.('visibilitychange', onReturn); }
+    };
+  }
+
   // Confirmation dans la page (pas de fenêtre native) : annuler ne déclenche rien.
   function askConfirm(dialog, title, lines, okLabel = 'Confirmer le remplacement') {
     return new Promise(resolve => {
@@ -303,5 +345,5 @@
       if (button.dataset.label !== undefined) button.textContent = button.dataset.label;
     }
   }
-  globalThis.AnkiPicker = Object.freeze({createDeckPicker, askConfirm, themeControl, busy, el});
+  globalThis.AnkiPicker = Object.freeze({createDeckPicker, deckSync, askConfirm, themeControl, busy, el});
 })();
