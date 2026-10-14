@@ -11,6 +11,7 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+  const showBusy = (...args) => busy(...args);   // défini plus bas (hissé)
   const MAX_OPTIONS = 50;
   /* Choix de paquet RECHERCHABLE : combobox accessible (rôle combobox + listbox).
      - Cliquer le champ sélectionne son texte : taper REMPLACE le nom affiché
@@ -185,7 +186,8 @@
       const what = describe();
       if (!what) return;
       if (what.existing) { closePanel(); choose(what.existing); return; }
-      busy = true; okBtn.disabled = true; cancelBtn.disabled = true;
+      busy = true; cancelBtn.disabled = true;
+      showBusy(okBtn, true, 'Création…');
       info.textContent = `Création de « ${deckLabel(what.name)} »…`;
       try {
         await onCreate(what.name);
@@ -194,7 +196,7 @@
         info.textContent = `Création impossible : ${e?.message || e}`;
         info.className = 'ankibridge-newdeckinfo bad';
         busy = false;
-      } finally { okBtn.disabled = false; cancelBtn.disabled = false; }
+      } finally { showBusy(okBtn, false); okBtn.disabled = false; cancelBtn.disabled = false; }
     }
     nameInput.addEventListener('input', describe);
     nameInput.addEventListener('keydown', e => {
@@ -285,5 +287,21 @@
     apply();
     return {button, stop: () => mq?.removeEventListener?.('change', apply)};
   }
-  globalThis.AnkiPicker = Object.freeze({createDeckPicker, askConfirm, themeControl, el});
+  /* Retour visuel d'une action en cours : roue qui tourne + libellé explicite,
+     bouton désactivé. Le libellé d'origine est rétabli à la fin. */
+  function busy(button, on, label = '') {
+    if (on) {
+      if (!button.classList.contains('is-busy')) button.dataset.label = button.textContent;
+      button.classList.add('is-busy');
+      button.setAttribute('aria-busy','true');
+      button.disabled = true;
+      if (label) button.textContent = label;
+    } else if (button.classList.contains('is-busy')) {
+      button.classList.remove('is-busy');
+      button.removeAttribute('aria-busy');
+      button.disabled = false;
+      if (button.dataset.label !== undefined) button.textContent = button.dataset.label;
+    }
+  }
+  globalThis.AnkiPicker = Object.freeze({createDeckPicker, askConfirm, themeControl, busy, el});
 })();

@@ -262,3 +262,29 @@
 .ankibridge-dark .ankibridge-holemenuitem:hover,.ankibridge-dark .ankibridge-holemenuitem:focus-visible{background:#273042}
 .ankibridge-dark .ankibridge-holemenuitem.current{color:#93c5fd}
 .ankibridge-dark .ankibridge-holemenuhint{color:#a8b2bd}
+/* ---------------------------------------------------------------------------
+   Retour visuel des boutons : survol, enfoncement au clic, état désactivé lisible,
+   et état « en cours » (roue + libellé) pour les actions qui prennent du temps.
+--------------------------------------------------------------------------- */
+.ankibridge-dialog button{transition:background-color .12s,box-shadow .12s,transform .06s,opacity .12s}
+.ankibridge-dialog button:not(:disabled):active{transform:translateY(1px) scale(.97)}
+.ankibridge-dialog button:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.ankibridge-review:hover:not(:disabled){background:#e0e7ff;border-color:#a5b4fc}
+.ankibridge-bulk button:hover:not(:disabled),.ankibridge-themebtn:hover{background:#e5e7eb}
+.ankibridge-action:hover:not(:disabled){background:#14532d}
+.ankibridge-replace:hover:not(:disabled){background:#1e40af}
+.ankibridge-newdeckok:hover:not(:disabled){background:#14532d}
+.ankibridge-review:disabled,.ankibridge-bulk button:disabled{opacity:.55;cursor:not-allowed}
+.ankibridge-dialog button.is-busy{cursor:progress;opacity:1}
+.ankibridge-action.is-busy,.ankibridge-newdeckok.is-busy{background:#166534}
+.ankibridge-replace.is-busy{background:#1d4ed8}
+.ankibridge-dialog button.is-busy::before{content:"";display:inline-block;width:11px;height:11px;margin-right:7px;vertical-align:-1px;
+  border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:ankibridge-spin .7s linear infinite}
+@keyframes ankibridge-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  .ankibridge-dialog button.is-busy::before{animation-duration:2.5s}
+  .ankibridge-dialog button:not(:disabled):active{transform:none}
+}
+.ankibridge-dark .ankibridge-review:hover:not(:disabled){background:#27365a;border-color:#4b5f8f}
+.ankibridge-dark .ankibridge-bulk button:hover:not(:disabled),.ankibridge-dark .ankibridge-themebtn:hover{background:#2f3742}
+.ankibridge-dark .ankibridge-dialog button:focus-visible{outline-color:#93c5fd}

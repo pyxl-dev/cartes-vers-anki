@@ -1572,6 +1572,63 @@ async function contentTests() {
     assert.match(css, /\.ankibridge-top\{flex:none;position:relative;z-index:3/);
   });
 
+  /* --- 1.6.0 : retour visuel des boutons --- */
+  await ta('retour visuel : « Relancer la comparaison » montre l’action en cours puis se rétablit', async () => {
+    let release = null;
+    const respond = msg => msg.type === 'ANALYZE' && release === false
+      ? new Promise(r => { release = () => r(respondOk(items2)(msg)); })
+      : respondOk(items2)(msg);
+    const ov = await openModal(respond, HOLES);
+    const btn = ov.querySelector('.ankibridge-review');
+    assert.equal(btn.textContent, 'Relancer la comparaison');
+    release = false;
+    btn.onclick();
+    assert.ok(btn.classList.contains('is-busy'), 'état « en cours »');
+    assert.equal(btn.textContent, 'Comparaison…');
+    assert.equal(btn.getAttribute('aria-busy'), 'true');
+    assert.equal(btn.disabled, true);
+    await new Promise(r => setTimeout(r, 50));
+    release();
+    await new Promise(r => setTimeout(r, 450));
+    assert.ok(!btn.classList.contains('is-busy'));
+    assert.equal(btn.textContent, 'Relancer la comparaison', 'libellé rétabli');
+    assert.equal(btn.disabled, false);
+  });
+  await ta('retour visuel : visible au moins un instant même si Anki répond tout de suite', async () => {
+    const ov = await openModal(respondOk(items2), HOLES);
+    const btn = ov.querySelector('.ankibridge-review');
+    btn.onclick();
+    await new Promise(r => setTimeout(r, 60));
+    assert.ok(btn.classList.contains('is-busy'), 'encore visible après 60 ms');
+    assert.equal(ov.querySelector('.ankibridge-msg').textContent, '2 nouvelles', 'le résultat, lui, est déjà affiché');
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(!btn.classList.contains('is-busy'));
+  });
+  await ta('retour visuel : import « en cours », puis « Import terminé »', async () => {
+    let release;
+    const respond = msg => msg.type === 'IMPORT' ? new Promise(r => { release = () => r(respondOk(items2)(msg)); }) : respondOk(items2)(msg);
+    const ov = await openModal(respond, HOLES);
+    const save = ov.querySelector('.ankibridge-action');
+    save.onclick();
+    await new Promise(r => setTimeout(r, 30));
+    assert.ok(save.classList.contains('is-busy'));
+    assert.equal(save.textContent, 'Import en cours…');
+    release();
+    await new Promise(r => setTimeout(r, 60));
+    assert.ok(!save.classList.contains('is-busy'));
+    assert.equal(save.textContent, 'Import terminé');
+    assert.equal(save.disabled, true, 'jamais de second import par erreur');
+  });
+  await ta('CSS : survol, enfoncement, désactivé et roue « en cours »', () => {
+    const css = fs.readFileSync(EXT('content.css'), 'utf8');
+    assert.match(css, /\.ankibridge-dialog button:not\(:disabled\):active\{transform:/);
+    assert.match(css, /\.ankibridge-review:hover:not\(:disabled\)\{background:/);
+    assert.match(css, /\.ankibridge-review:disabled[^{]*\{opacity:\.55/);
+    assert.match(css, /button\.is-busy::before\{[^}]*animation:ankibridge-spin/);
+    assert.match(css, /@keyframes ankibridge-spin/);
+    assert.match(css, /prefers-reduced-motion:reduce/);
+  });
+
   /* --- 1.6.0 : champ paquet et création --- */
   const deckServer = (decks, log, n = 13) => msg => {
     log.push(msg);

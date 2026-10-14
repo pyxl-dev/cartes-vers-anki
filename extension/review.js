@@ -7,7 +7,10 @@
 (() => {
   const {deckLabel, renderInto, sameDeck, stripMarkdown, validateDeckName, readableTitle} = AnkiShared;
   const {richEditor} = AnkiRich;
-  const {createDeckPicker, askConfirm, themeControl, el} = AnkiPicker;
+  const {createDeckPicker, askConfirm, themeControl, busy, el} = AnkiPicker;
+  // Durée minimale de l'état « en cours » : même si Anki répond instantanément,
+  // le clic produit un retour visible.
+  const MIN_BUSY_MS = 300;
   const api = (type, extra={}) => new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({type,...extra}, res => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -157,6 +160,7 @@
     });
     dialog.append(main);
     const foot=el('div','ankibridge-foot'); const msg=el('span','ankibridge-msg','Anki doit être ouvert. Aucune donnée ne part vers un service tiers.');
+    msg.setAttribute('role','status'); msg.setAttribute('aria-live','polite');
     // N'apparaît que si au moins une mise à jour de note est cochée.
     const replaceBtn=el('button','ankibridge-replace','Remplacer les notes existantes'); replaceBtn.type='button'; replaceBtn.disabled=true; replaceBtn.hidden=true;
     const save=el('button','ankibridge-action','Importer dans Anki'); save.type='button'; save.disabled=true;
@@ -225,7 +229,7 @@
     const invalidate=({resetChecks=false,why}={})=>{revision++;analysisSeq++;verified=false;lastReport=null;save.disabled=true;
       // Une analyse en vol est abandonnée : on rend la main tout de suite, sinon
       // le bouton resterait désactivé indéfiniment après une édition.
-      analyze.disabled=false;
+      busy(analyze,false); analyze.disabled=false;
       if(resetChecks)for(const e of entries){e.check.checked=true;e.notice.replaceChildren();}
       for(const e of entries){e.replaceRow.replaceChildren();e.replace=null;}
       replaceBtn.disabled=true; replaceBtn.hidden=true; replaceBtn.textContent='Remplacer les notes existantes';
@@ -291,7 +295,8 @@
       if(!alive())return;
       const token=++analysisSeq;
       const atStart=revision;
-      analyze.disabled=true; save.disabled=true; replaceBtn.disabled=true;
+      const started=Date.now();
+      busy(analyze,true,'Comparaison…'); save.disabled=true; replaceBtn.disabled=true;
       setPending();
       msg.textContent=`Comparaison avec « ${deckLabel(picker.value)} » (et ses sous-paquets)…`;
       try {
@@ -351,7 +356,12 @@
         verified=false;
         msg.textContent=`Comparaison impossible : ${e.message} — clique sur « Relancer la comparaison ».`;
       }
-      finally{ if(alive()&&token===analysisSeq) analyze.disabled=false; }
+      finally{
+        if(alive()&&token===analysisSeq){
+          setTimeout(()=>{ if(alive()&&token===analysisSeq){ busy(analyze,false); analyze.disabled=false; } },
+            Math.max(0,MIN_BUSY_MS-(Date.now()-started)));
+        }
+      }
     };
     analyze.onclick=runAnalysis;
     // Changer de paquet relance la comparaison automatiquement (jamais d'import
@@ -444,16 +454,17 @@
         const replacements=selected.map(({e,m,wanted})=>({noteId:m.id,model:m.model,deck:m.deck,decks:m.decks,type:e.card.type,
           // Champs complets (non tronqués) : les versions courtes ne servent qu'à l'affichage.
           fingerprint:m.frontFull||m.front,originalSecond:m.secondFull??m.second,mod:m.mod,first:wanted[0],second:wanted[1]}));
-        replaceBtn.disabled=true; save.disabled=true;
-        msg.textContent=`Remplacement en cours : ${replacements.length} note(s)…`;
+        busy(replaceBtn,true,'Mise à jour…'); save.disabled=true;
+        msg.textContent=`Mise à jour en cours : ${replacements.length} note(s)…`;
         const r=await api('REPLACE',{replacements});
         msg.textContent=`${r.updated} note(s) mise(s) à jour, ${r.skipped} sans changement`+
           (r.failed.length?`, ${r.failed.length} refusée(s) : ${r.failed.map(f=>`#${f.noteId} ${f.reason}`).join(' | ')}`:'')+'.';
         // Les conclusions de l'analyse ne sont plus valables après écriture.
+        busy(replaceBtn,false);
         verified=false; save.disabled=true; replaceBtn.disabled=true;
         analyze.disabled=false;
         setStale();
-      }catch(e){msg.textContent=`Erreur : ${e.message}`;replaceBtn.disabled=!verified;}
+      }catch(e){busy(replaceBtn,false);msg.textContent=`Erreur : ${e.message}`;replaceBtn.disabled=!verified;}
     };
     save.onclick=async()=>{
       try {
@@ -473,18 +484,19 @@
           throw new Error('Aucune carte sélectionnée. Coche les cartes souhaitées.');
         }
         AnkiCards.toCards({cards:selected});
-        save.disabled=true; analyze.disabled=true; replaceBtn.disabled=true;
-        msg.textContent=`Import en cours : ${selected.length} carte(s)...`;
+        busy(save,true,'Import en cours…'); analyze.disabled=true; replaceBtn.disabled=true;
+        msg.textContent=`Import en cours : ${selected.length} carte(s)…`;
         await chrome.storage.local.set({deck:picker.value});
         const r=await api('IMPORT',{deck:picker.value,cards:selected});
         msg.textContent=`${r.added} ajoutée(s), ${r.skipped} doublon(s) ignoré(s).`+
           (r.errors.length ? `\n${r.errors.join('\n')}` : ' Révise ensuite dans Anki.');
-        save.textContent='Import terminé';
+        busy(save,false);
+        save.textContent='Import terminé'; save.disabled=true;
         // Ne jamais réimporter accidentellement la même sélection après un premier lot.
         verified=false;
         analyze.disabled=false;
         setStale();
-      }catch(e){msg.textContent=`Erreur : ${e.message}`;save.disabled=false;analyze.disabled=false;}
+      }catch(e){busy(save,false);msg.textContent=`Erreur : ${e.message}`;save.disabled=false;analyze.disabled=false;}
     };
     updateCount();
   }
