@@ -264,8 +264,10 @@
     const oldPrefix = src.slice(cz.start, cz.cStart);
     return {ok: true, text: src.slice(0, cz.start) + prefix + src.slice(cz.start + oldPrefix.length)};
   }
-  // Nouveau trou sur [start, end[ du texte source : numéro suivant (= nouvelle carte).
-  function addCloze(text, start, end) {
+  /* Nouveau trou sur [start, end[ du texte source : numéro suivant (= nouvelle
+     carte), ou — avec {same: true}, comme Ctrl+Maj+Alt+C dans Anki — le plus grand
+     numéro déjà utilisé (= caché sur la même carte que le dernier trou). */
+  function addCloze(text, start, end, {same = false} = {}) {
     const src = String(text ?? '');
     let a = Math.max(0, Math.min(start, end)), b = Math.min(src.length, Math.max(start, end));
     while (a < b && /\s/.test(src[a])) a++;
@@ -275,7 +277,8 @@
     if (/\n/.test(slice)) return {ok: false, error: 'Un trou doit tenir sur une seule ligne.'};
     const existing = clozesOf(src);
     if (existing.some(c => a < c.end && b > c.start)) return {ok: false, error: 'La sélection touche un trou existant.'};
-    const n = existing.reduce((m, c) => Math.max(m, c.n), 0) + 1;
+    const max = existing.reduce((m, c) => Math.max(m, c.n), 0);
+    const n = same ? Math.max(1, max) : max + 1;
     const prefix = `{{c${n}::`;
     const next = src.slice(0, a) + prefix + slice + '}}' + src.slice(b);
     const made = clozesOf(next).find(c => c.start === a);

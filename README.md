@@ -95,7 +95,7 @@ Détails et dépannage : **[macos/LISEZ-MOI.md](macos/LISEZ-MOI.md)**.
 
    **Éditeur visuel.** Chaque champ (question, réponse, texte à trous, précisions) se modifie **mis en forme**, comme dans un traitement de texte : barre d'outils **G** (gras), *I* (italique), x² (exposant), x₂ (indice), listes à puces et numérotées, « Effacer » la mise en forme ; Ctrl/Cmd+B et Ctrl/Cmd+I fonctionnent aussi. Un collage arrive toujours en **texte simple**. Le lien **« Texte brut »** montre le texte exact envoyé à Anki (avec son aperçu) pour qui préfère l'écrire à la main.
 
-   **Textes à trous sans syntaxe.** Chaque trou est une **case** contenant la réponse attendue, précédée du numéro de la carte qu'il produira : on corrige la réponse dans la case, on retire un trou avec **×** (le texte reste), et on **crée un trou** en sélectionnant un mot puis **« Transformer la sélection en trou »** (nouveau numéro = nouvelle carte). Le texte autour des trous se modifie librement ; une modification qui casserait un trou est refusée avec une explication.
+   **Textes à trous sans syntaxe.** Chaque trou est une **case** contenant la réponse attendue, précédée du numéro de la carte qu'il produira : on corrige la réponse dans la case, on retire un trou avec **×** (le texte reste), et on **crée un trou** en sélectionnant un mot puis **« Transformer la sélection en trou »** (nouveau numéro = nouvelle carte) — ou, comme dans Anki, **Ctrl+Maj+C** (Cmd+Maj+C sur Mac), et **Ctrl+Maj+Alt+C** pour le mettre sur la même carte que le dernier trou. **Ctrl+Z** annule (y compris l'ajout, le retrait ou le changement de numéro d'un trou) et **Ctrl+Maj+Z** rétablit. Le texte autour des trous se modifie librement ; une modification qui casserait un trou est refusée avec une explication.
 
    **Apparence.** Le bouton « Thème » (en haut de la fenêtre) et le réglage « Apparence » du popup choisissent **automatique** (suit le mode clair / sombre du système, en direct), **clair** ou **sombre**.
 5. La **comparaison se lance automatiquement** à l'ouverture (sur le dernier paquet utilisé) : les doublons exacts sont décochés, les formulations proches sont signalées « à vérifier ».
@@ -239,11 +239,11 @@ Autres points :
 ## Tests
 
 ```bash
-node tests/test.cjs          # extension : 236 tests
+node tests/test.cjs          # extension : 238 tests
 bash tests/mac-beta-setup.sh # kit macOS : 42 tests, dans un bac à sable jetable
 ```
 
-236 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
+238 tests hors navigateur, sans réseau externe. Les scripts sont chargés dans l'ordre réel lu dans `manifest.json`, `popup.html` et `importScripts`, et les tests d'intégration ne peuvent joindre **que** le faux AnkiConnect (jamais un vrai Anki ouvert sur la machine) :
 
 - lecture tolérante : carte invalide isolée, réponse coupée au milieu d'une carte, réponse recollée sur deux blocs, plusieurs blocs JSON, 230 cartes découpées en 3 lots, accolades et guillemets dans le texte, code ordinaire ignoré ;
 - analyse du JSON : lots de 5 / 50 / 100 / 101 / 200 cartes, bloc ```` ```json ````, tableau nu, clé `notes`, cloze valide et invalide, accents, tags, HTML, contenu trop long ;

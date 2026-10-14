@@ -1492,23 +1492,82 @@ async function contentTests() {
     assert.deepEqual(pills().map(p => p.textContent), ['2', '1']);
     assert.equal(pills()[0].tagName, 'BUTTON', 'pastille cliquable');
     pills()[0].onclick();
-    const items = () => row.querySelectorAll('.ankibridge-holemenuitem').map(b => b.textContent);
+    const items = () => ov.querySelectorAll('.ankibridge-holemenuitem').map(b => b.textContent);
     assert.deepEqual(items(), ['Carte 1', 'Carte 2 (actuelle)'], 'déjà seul sur la dernière carte : pas de « nouvelle carte » inutile');
     assert.equal(pills()[0].getAttribute('aria-expanded'), 'true');
-    assert.match(row.querySelector('.ankibridge-holemenuhint').textContent, /Même numéro = trous cachés ensemble/);
-    row.querySelectorAll('.ankibridge-holemenuitem')[0].onclick();
+    assert.match(ov.querySelector('.ankibridge-holemenuhint').textContent, /Même numéro = trous cachés ensemble/);
+    ov.querySelectorAll('.ankibridge-holemenuitem')[0].onclick();
     assert.equal(area.value, 'Une adresse {{c1::IPv4}} par DHCP : {{c1::DORA}}.', 'même carte : même numéro');
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /carte n° 1 : caché en même temps que 1 autre trou/);
-    assert.equal(row.querySelector('.ankibridge-holemenu'), null, 'menu refermé');
+    assert.equal(ov.querySelector('.ankibridge-holemenu'), null, 'menu refermé');
     assert.deepEqual(pills().map(p => p.textContent), ['1', '1']);
     pills()[1].onclick();
     assert.deepEqual(items(), ['Carte 1 (actuelle)', 'Nouvelle carte (n° 2)']);
-    row.querySelectorAll('.ankibridge-holemenuitem')[1].onclick();
+    ov.querySelectorAll('.ankibridge-holemenuitem')[1].onclick();
     assert.equal(area.value, 'Une adresse {{c1::IPv4}} par DHCP : {{c2::DORA}}.', 'nouvelle carte');
     assert.match(row.querySelector('.ankibridge-holemsg').textContent, /seul sur la carte n° 2/);
     pills()[0].onclick(); pills()[0].onclick();
-    assert.equal(row.querySelector('.ankibridge-holemenu'), null, 'second clic : menu refermé');
+    assert.equal(ov.querySelector('.ankibridge-holemenu'), null, 'second clic : menu refermé');
     assert.match(ov.querySelector('.ankibridge-msg').textContent, /relancer la comparaison/, 'carte modifiée : comparaison à relancer');
+  });
+  await ta('trous : raccourcis d’Anki — Ctrl+Maj+C (nouvelle carte), Ctrl+Maj+Alt+C (même carte)', async () => {
+    const cardsJson = JSON.stringify({ cards: [{ type: 'cloze', text: 'Le **protocole** DHCP attribue une **adresse** {{c1::IP}}.', extra: '' }] });
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, cardsJson))] }, respondOk([anItem('new')]));
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const row = hh.root.querySelectorAll('.ankibridge-row')[0];
+    const area = row.querySelectorAll('textarea')[0];
+    const ed = editorsOf(row)[0];
+    const bold = n => ed.children.filter(c => c.tagName === 'B')[n];
+    const key = extra => ed.dispatchEvent({ type: 'keydown', key: 'C', code: 'KeyC', ctrlKey: true, shiftKey: true, ...extra });
+    hh.ctx.window.selection = fakeSelection(ed, ed.children.indexOf(bold(0)), ed.children.indexOf(bold(0)) + 1);
+    key({});
+    assert.equal(area.value, 'Le {{c2::**protocole**}} DHCP attribue une **adresse** {{c1::IP}}.', 'Ctrl+Maj+C : nouvelle carte');
+    hh.ctx.window.selection = fakeSelection(ed, ed.children.indexOf(bold(0)), ed.children.indexOf(bold(0)) + 1);
+    key({ altKey: true, metaKey: true, ctrlKey: false });
+    assert.equal(area.value, 'Le {{c2::**protocole**}} DHCP attribue une {{c2::**adresse**}} {{c1::IP}}.', 'Cmd+Maj+Alt+C : même carte que le dernier trou');
+    assert.match(row.querySelector('.ankibridge-holemsg').textContent, /carte n° 2, caché avec 1 autre trou/);
+    assert.match(row.querySelector('.ankibridge-holeadd').getAttribute('title'), /Ctrl\+Maj\+C/);
+  });
+  await ta('annuler / rétablir : Ctrl+Z et Ctrl+Maj+Z sur les trous, la barre d’outils et la frappe', async () => {
+    const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, HOLES))] }, respondOk(items2));
+    hh.ctx.document.execCommand = () => true;
+    await new Promise(r => setTimeout(r, 700));
+    hh.root.querySelector('.ankibridge-btn').click();
+    await new Promise(r => setTimeout(r, 900));
+    const row = hh.root.querySelectorAll('.ankibridge-row')[0];
+    const area = row.querySelectorAll('textarea')[0];
+    const ed = () => editorsOf(row)[0];
+    const undo = () => ed().dispatchEvent({ type: 'keydown', key: 'z', ctrlKey: true });
+    const redo = () => ed().dispatchEvent({ type: 'keydown', key: 'z', ctrlKey: true, shiftKey: true });
+    const start = area.value;
+    row.querySelectorAll('.ankibridge-holeremove')[1].onclick();
+    const removed = area.value;
+    assert.notEqual(removed, start);
+    undo();
+    assert.equal(area.value, start, 'retrait du trou annulé');
+    assert.equal(row.querySelectorAll('.ankibridge-holeinput').length, 2, 'éditeur redessiné');
+    assert.match(row.querySelector('.ankibridge-holemsg').textContent, /annulée/);
+    redo();
+    assert.equal(area.value, removed, 'rétabli');
+    undo();
+    row.querySelectorAll('.ankibridge-holenum')[1].onclick();
+    hh.root.querySelectorAll('.ankibridge-holemenuitem')[0].onclick();
+    assert.match(area.value, /\{\{c1::DORA::acronyme\}\}/, 'trou passé sur la carte 1');
+    undo();
+    assert.equal(area.value, start, 'changement de numéro annulé');
+    // Frappe : regroupée, annulée d'un coup après une pause.
+    ed().replaceChildren(h('div', {}, 'Texte tapé à la main'));
+    ed().dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(area.value, 'Texte tapé à la main');
+    await new Promise(r => setTimeout(r, 600));
+    undo();
+    assert.equal(area.value, start, 'frappe annulée');
+    ed().dispatchEvent({ type: 'beforeinput', inputType: 'historyRedo' });
+    assert.equal(area.value, 'Texte tapé à la main', 'menu Édition › Rétablir');
+    ed().dispatchEvent({ type: 'keydown', key: 'y', ctrlKey: true });
+    assert.equal(area.value, 'Texte tapé à la main', 'rien à rétablir : aucun changement');
   });
   await ta('trous : × retire le trou (texte gardé) ; une sélection devient un trou', async () => {
     const hh = contentHarness({ assistantBody: [h('pre', {}, h('code', {}, HOLES))] }, respondOk(items2));
@@ -1570,6 +1629,8 @@ async function contentTests() {
     const css = fs.readFileSync(EXT('content.css'), 'utf8');
     assert.match(css, /\.ankibridge-main\{flex:1 1 auto;min-height:0;[^}]*overflow:auto/);
     assert.match(css, /\.ankibridge-top\{flex:none;position:relative;z-index:3/);
+    assert.match(css, /\.ankibridge-overlay\{[^}]*overflow:hidden/, 'le fond ne défile jamais');
+    assert.match(css, /\.ankibridge-main\{overscroll-behavior:contain;position:relative\}/, 'libellés absolus contenus dans la liste');
   });
 
   /* --- 1.6.0 : retour visuel des boutons --- */
@@ -2832,6 +2893,10 @@ function formatTests() {
     let r = S.addCloze(text, ...at('suit'));
     assert.equal(r.text, 'Le **processus DHCP** suit {{c1::DORA}} en `code` et Na^+^.'.replace('suit', '{{c2::suit}}'));
     assert.equal(r.n, 2, 'numéro suivant : une nouvelle carte');
+    const same = S.addCloze(text, ...at('suit'), { same: true });
+    assert.equal(same.n, 1, 'même carte : plus grand numéro existant');
+    assert.ok(same.text.includes('{{c1::suit}}'));
+    assert.equal(S.addCloze('sans trou', 0, 4, { same: true }).n, 1, 'premier trou : carte 1');
     r = S.addCloze(text, ...at('DHCP'));
     assert.equal(r.text, 'Le **processus {{c2::DHCP}}** suit {{c1::DORA}} en `code` et Na^+^.', 'dans un gras : accepté');
     r = S.addCloze(text, text.indexOf(' suit') - 1, text.indexOf(' suit') + 5);
@@ -3003,7 +3068,8 @@ function runnerVerdict({ fail, ranSections, expectedSections, declared, executed
 }
 
 const EXPECTED_SECTIONS = 8;
-const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 120000);
+// Garde-fou anti-blocage (la suite dure environ 2 min, surtout des attentes de minuteries).
+const SUITE_TIMEOUT_MS = Number(process.env.SUITE_TIMEOUT_MS || 300000);
 let ranSections = 0;
 let suiteDone = false;
 const watchdog = setTimeout(() => {

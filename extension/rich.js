@@ -153,7 +153,44 @@
       area.dispatchEvent(new Event('input', {bubbles: true}));
       fromEditor = false;
     };
-    const sync = () => commit(domToMarkdown(editor));
+    /* Annuler / rétablir (Ctrl+Z, Ctrl+Maj+Z ou Ctrl+Y). L'éditeur se redessine
+       après une action sur un trou : l'historique natif du navigateur ne suit
+       plus, il est donc remplacé par le nôtre (états successifs du texte). La
+       frappe est regroupée par pauses ; les actions sur les trous et la barre
+       d'outils forment chacune une étape. */
+    const HISTORY_MAX = 100;
+    let history = [area.value], at = 0, typingTimer = null;
+    const record = () => {
+      clearTimeout(typingTimer); typingTimer = null;
+      if (area.value === history[at]) return;
+      history = history.slice(0, at + 1);
+      history.push(area.value);
+      if (history.length > HISTORY_MAX) history.shift();
+      at = history.length - 1;
+    };
+    const sync = () => {
+      commit(domToMarkdown(editor));
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(record, 500);
+    };
+    // Action sur un trou : une étape d'historique, puis éditeur redessiné.
+    const apply = text => { record(); commit(text); paint(); record(); };
+    const placeCaretAtEnd = () => {
+      const sel = window.getSelection?.();
+      if (!sel || typeof document.createRange !== 'function') return;
+      const r = document.createRange(); r.selectNodeContents(editor); r.collapse(false);
+      sel.removeAllRanges(); sel.addRange(r);
+    };
+    const travel = step => {
+      record();
+      const next = at + step;
+      if (next < 0 || next >= history.length) return false;
+      at = next;
+      commit(history[at]); paint();
+      say(step < 0 ? 'Modification annulée.' : 'Modification rétablie.');
+      editor.focus(); placeCaretAtEnd();
+      return true;
+    };
     // Menu du numéro de carte d'un trou.
     let openMenu = null;
     const closeMenu = () => {
@@ -161,7 +198,7 @@
       openMenu.menu.remove();
       openMenu.button.setAttribute('aria-expanded','false');
       document.removeEventListener('mousedown', openMenu.outside, true);
-      document.removeEventListener('scroll', closeMenu, true);
+      document.removeEventListener('scroll', openMenu.follow, true);
       openMenu = null;
     };
     const menu = (k, hole, button) => {
@@ -183,7 +220,7 @@
         if (n === mine.n) return;
         const r = setClozeNumber(md, k, n);
         if (!r.ok) { say(r.error, true); return; }
-        commit(r.text); paint();
+        apply(r.text);
         const others = clozesOf(r.text).filter(c => c.n === n).length - 1;
         say(others ? `Trou placé sur la carte n° ${n} : caché en même temps que ${others} autre${others > 1 ? 's' : ''} trou${others > 1 ? 's' : ''}.`
           : `Trou placé seul sur la carte n° ${n}.`);
@@ -204,27 +241,37 @@
       }
       if (!(alone && mine.n === used[used.length - 1])) box.append(item(next, `Nouvelle carte (n° ${next})`));
       box.append(el('p','ankibridge-holemenuhint','Même numéro = trous cachés ensemble sur la même carte.'));
-      hole.append(box);
+      // Accroché à la fenêtre, hors de la zone qui défile et hors du texte modifiable.
+      (editor.closest('.ankibridge-dialog') || hole).append(box);
       // Position fixe calculée sous la pastille (ou au-dessus s'il manque de la
       // place) : le menu n'est jamais coupé par la zone d'édition qui défile.
-      const r = button.getBoundingClientRect?.();
-      if (r) {
+      const place = () => {
+        const r = button.getBoundingClientRect?.();
+        if (!r) return true;
+        // Pastille sortie de la zone visible de la liste : le menu n'a plus de sens.
+        const area = (editor.closest('.ankibridge-main') || editor).getBoundingClientRect?.();
+        if (!button.isConnected || (area && (r.bottom < area.top || r.top > area.bottom))) return false;
         const h = box.getBoundingClientRect?.().height || 0;
         const below = r.bottom + 4 + h <= (window.innerHeight || Infinity);
-        box.style.left = Math.max(8, Math.min(r.left, (window.innerWidth || 1e9) - 230)) + 'px';
+        box.style.left = Math.max(8, Math.min(r.left, (window.innerWidth || 1e9) - 270)) + 'px';
         box.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - h)) + 'px';
-      }
-      document.addEventListener('scroll', closeMenu, true);
+        return true;
+      };
+      place();
+      // Au défilement, le menu suit sa pastille (le défilement doux qui amène la
+      // pastille à l'écran arrive juste après le clic) ; il se ferme si elle disparaît.
+      const follow = () => { if (!place()) closeMenu(); };
+      document.addEventListener('scroll', follow, true);
       button.setAttribute('aria-expanded','true');
       const outside = e => { if (!box.contains(e.target) && e.target !== button) closeMenu(); };
       document.addEventListener('mousedown', outside, true);
-      openMenu = {menu: box, button, outside};
+      openMenu = {menu: box, button, outside, follow};
       box.querySelector('.ankibridge-holemenuitem')?.focus?.();
     };
     const hooks = {say, sync, menu, remove: k => {
       const r = removeCloze(domToMarkdown(editor), k);
       if (!r.ok) { say(r.error, true); return; }
-      commit(r.text); paint();
+      apply(r.text);
       say('Trou retiré : le texte reste dans la carte.');
     }};
     const paint = () => {
@@ -250,27 +297,46 @@
         editor.focus();
         exec('styleWithCSS', false);
         exec(cmd);
-        sync(); refresh();
+        sync(); record(); refresh();
       };
       buttons.push(b); bar.append(b);
     }
+    // Sélection → trou : nouvelle carte, ou même carte que le dernier trou.
+    const addHole = same => {
+      const where = selectionInSource(editor);
+      if (!where) { say('Sélectionne d’abord un mot ou une expression dans le texte.', true); return; }
+      if (where.error) { say(where.error, true); return; }
+      const r = addCloze(where.text, where.start, where.end, {same});
+      if (!r.ok) { say(r.error, true); return; }
+      apply(r.text);
+      window.getSelection?.()?.removeAllRanges?.();
+      const together = clozesOf(r.text).filter(c => c.n === r.n).length - 1;
+      say(together ? `Trou ajouté sur la carte n° ${r.n}, caché avec ${together} autre${together > 1 ? 's' : ''} trou${together > 1 ? 's' : ''}.`
+        : `Trou ajouté : il deviendra la carte n° ${r.n}.`);
+    };
     if (clozes) {
       const add = el('button','ankibridge-holeadd','Transformer la sélection en trou');
       add.type = 'button';
-      add.setAttribute('title','Sélectionne un mot ou une expression dans le texte, puis clique ici');
+      add.setAttribute('title','Sélectionne un mot ou une expression dans le texte, puis clique ici (Ctrl+Maj+C ; même carte que le dernier trou : Ctrl+Maj+Alt+C)');
+      add.setAttribute('aria-keyshortcuts','Control+Shift+C Meta+Shift+C');
       add.addEventListener('mousedown', e => e.preventDefault());
-      add.onclick = () => {
-        const where = selectionInSource(editor);
-        if (!where) { say('Sélectionne d’abord un mot ou une expression dans le texte.', true); return; }
-        if (where.error) { say(where.error, true); return; }
-        const r = addCloze(where.text, where.start, where.end);
-        if (!r.ok) { say(r.error, true); return; }
-        commit(r.text); paint();
-        window.getSelection?.()?.removeAllRanges?.();
-        say(`Trou ajouté : il deviendra la carte n° ${r.n}.`);
-      };
+      add.onclick = () => addHole(false);
       bar.append(add);
     }
+    // Raccourcis : ceux de l'éditeur d'Anki pour les trous, et annuler / rétablir.
+    editor.addEventListener('keydown', e => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = String(e.key || '').toLowerCase();
+      if (clozes && e.shiftKey && (e.code === 'KeyC' || key === 'c')) { e.preventDefault(); addHole(!!e.altKey); return; }
+      if (key === 'z' && !e.shiftKey) { e.preventDefault(); travel(-1); return; }
+      if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); travel(1); }
+    });
+    // Menu « Édition › Annuler » du navigateur : même historique.
+    editor.addEventListener('beforeinput', e => {
+      if (e.inputType === 'historyUndo') { e.preventDefault(); travel(-1); }
+      else if (e.inputType === 'historyRedo') { e.preventDefault(); travel(1); }
+    });
     editor.addEventListener('input', sync);
     editor.addEventListener('keyup', refresh);
     editor.addEventListener('mouseup', refresh);
@@ -279,7 +345,8 @@
       e.preventDefault();
       exec('insertText', e.clipboardData?.getData('text/plain') || '');
     });
-    area.addEventListener('input', () => { if (!fromEditor) paint(); });
+    // Changement fait ailleurs (mode « Texte brut ») : éditeur redessiné, étape d'historique.
+    area.addEventListener('input', () => { if (!fromEditor) { paint(); record(); } });
     box.append(bar, editor, msg);
     paint();
     return {box, editor, paint};
