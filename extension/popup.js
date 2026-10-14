@@ -41,6 +41,21 @@ const clearConnFeedback=()=>{
 // la vue normale. Le message d'action reste court et actionnable.
 const setTech=msg=>{ const el=$('techDetail'); if(el)el.textContent = msg ? `Détail technique : ${msg}` : ''; };
 
+/* --- Apparence : automatique (système), clair ou sombre -------------------
+   Même réglage que le bouton « Thème » de la fenêtre de vérification. */
+const THEME_KEY='theme';
+const applyTheme=theme=>{
+  const value=['light','dark'].includes(theme)?theme:'auto';
+  if(value==='auto')document.documentElement?.removeAttribute('data-theme');
+  else document.documentElement?.setAttribute('data-theme',value);
+  if($('theme'))$('theme').value=value;
+};
+chrome.storage.local.get(THEME_KEY).then(saved=>applyTheme(saved?.[THEME_KEY])).catch(()=>applyTheme('auto'));
+$('theme')?.addEventListener('change',()=>{
+  applyTheme($('theme').value);
+  chrome.storage.local.set({[THEME_KEY]:$('theme').value}).catch(()=>{});
+});
+
 let portIsManual=false;
 async function loadPort() {
   const info=await api('PORT_INFO');
@@ -76,8 +91,7 @@ $('autoPort').onclick=async()=>{
 let analyzed=null;
 const invalidate=()=>{ analyzed=null;$('import').disabled=true;$('analysis').replaceChildren(); };
 // Recherche de paquet : casse et accents ignorés, sur le chemin complet.
-const normText=s=>String(s??'').replace(/œ/gi,'oe').replace(/æ/gi,'ae').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-const deckLabel=d=>String(d).split('::').map(s=>s.trim()).filter(Boolean).join(' › ');
+const {normText,deckLabel}=AnkiShared; // shared.js
 let allDecks=[];
 function fillDecks(list,{keepCurrent=true}={}){
   const current=$('deck').value;
@@ -213,9 +227,11 @@ $('import').onclick=async()=>{
 function buildGeneralPrompt(count) {
   return `À partir du cours, des notes, du document ou du contenu que j’ai joint ou fourni dans cette conversation, crée ${count} flashcards Anki pour mes révisions. Si tu n’as pas reçu de contenu à transformer, demande-moi de te le fournir avant de générer.
 
-Exigences : une connaissance par carte ; formulation non ambiguë ; réponse concise ; privilégier les connaissances importantes du document. Respecte strictement les faits, chiffres, unités, noms et références du contenu, quel que soit le sujet traité. N’invente aucune information et n’ajoute aucune connaissance absente du contenu fourni. Évite les doublons dans ce lot.
+Exigences : une connaissance par carte ; question précise et non ambiguë ; privilégier les connaissances importantes du document. Respecte strictement les faits, chiffres, unités, noms et références du contenu, quel que soit le sujet traité. N’invente aucune information et n’ajoute aucune connaissance absente du contenu fourni. Évite les doublons dans ce lot.
 
-Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Si la réponse risque d’être trop longue pour un seul message, découpe-la en plusieurs blocs de code JSON complets, chacun au même format, plutôt que de couper une carte au milieu. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
+Les cours sont souvent détaillés : ne réduis pas une explication à une phrase si le contenu en dit davantage. Dans "back" (ou "extra" pour une carte cloze), commence par l’essentiel en une phrase, puis, si le contenu le justifie, ajoute une explication structurée sur plusieurs lignes : paragraphes courts séparés par une ligne vide, listes de points, étapes numérotées, mots-clés en gras, mécanismes, causes et conséquences, valeurs et unités du cours. Pour une carte cloze, le trou {{c1::…}} ne contient que le terme ou la courte expression à retenir, sans mise en forme autour ; les explications vont dans "extra". Utilise {{c1::…}}, {{c2::…}} pour des trous à réviser séparément dans la même phrase.
+
+Pour permettre l’import direct dans Anki, réponds avec un seul bloc de code JSON valide, sans texte avant ou après. Si la réponse risque d’être trop longue pour un seul message, découpe-la en plusieurs blocs de code JSON complets, chacun au même format, plutôt que de couper une carte au milieu. Structure attendue : {"cards":[{"type":"basic","front":"Question","back":"Réponse essentielle en une phrase.\\n\\n**Explication** :\\n- premier point\\n- second point","tags":["revision"]},{"type":"cloze","text":"Un concept est {{c1::une notion}}.","extra":"Précision éventuelle, sur plusieurs lignes si utile.","tags":["revision"]}]}. Utilise des cartes classiques ou cloze selon ce qui convient au contenu. Mise en forme autorisée dans les textes des cartes, et seulement celle-ci : **gras**, *italique*, \`code\`, listes avec une ligne par élément commençant par « - » ou « 1. » (retour à la ligne écrit \\n dans le JSON), exposant ^texte^ et indice ~texte~ (par exemple x^2^ ou x~1~). Aucun lien, aucune image, aucune balise HTML. Une mise en forme peut se trouver à l’intérieur d’un trou {{c1::…}}, jamais à cheval sur ses accolades. Dans "tags", mets un ou deux mots-clés du thème traité, ou "revision" si le thème n’est pas évident. L’extension Anki affiche un bouton d’import automatiquement : je n’ai pas besoin de copier ce JSON.`;
 }
 $('composePrompt').onclick=async()=>{
   const btn=$('composePrompt');btn.disabled=true;
@@ -232,7 +248,14 @@ $('composePrompt').onclick=async()=>{
     });
     if(!response?.ok)throw new Error(response?.error||'Éditeur ChatGPT non trouvé.');
     feedback('Demande insérée dans ChatGPT. Envoie-la : le bouton « Ajouter à Anki » apparaîtra sous les cartes.','ok');
-  }catch(e){feedback(`Ouvre chatgpt.com dans cet onglet, puis réessaie. (${e.message})`,'error');}
+  }catch(e){
+    // « Receiving end does not exist » : soit l'onglet n'est pas ChatGPT, soit il a
+    // été ouvert AVANT une mise à jour de l'extension et n'a pas le nouveau script.
+    // Sans permission « tabs », l'URL de l'onglet n'est pas lisible : on dit les deux.
+    feedback(AnkiShared.isStaleContext(e)
+      ?'Ouvre chatgpt.com dans cet onglet. S’il est déjà ouvert, recharge la page (⌘R ou Ctrl+R) : elle date d’avant la dernière mise à jour de l’extension.'
+      :`Ouvre chatgpt.com dans cet onglet, puis réessaie. (${e.message})`,'error');
+  }
   finally{btn.disabled=false;}
 };
 

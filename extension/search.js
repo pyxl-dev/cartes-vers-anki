@@ -2,13 +2,10 @@
 (function(root) {
   'use strict';
   const MAX_CONTEXT_CHARS=18000;
+  // Décodage commun (shared.js) ; on retire en plus scripts et feuilles de style.
   function stripped(html) {
-    return String(html??'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'')
-      .replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/(?:p|div|li|tr)>/gi,'\n')
-      .replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ').replace(/&lt;/gi,'<')
-      .replace(/&gt;/gi,'>').replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'")
-      .replace(/&amp;/gi,'&').trim();
+    return root.AnkiShared.htmlToText(String(html??'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'')).trim();
   }
   function sanitizeResult(info) {
     const raw=Object.entries(info.fields||{}).sort((a,b)=>(a[1].order??0)-(b[1].order??0));

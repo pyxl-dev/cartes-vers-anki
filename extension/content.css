@@ -4,7 +4,14 @@
    sur les thèmes clairs comme sombres.
 --------------------------------------------------------------------------- */
 .ankibridge-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:2147483600;
-  display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto}
+  display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:hidden;overscroll-behavior:contain}
+/* Le fond ne défile jamais : la fenêtre tient dans l'écran (92 % de la hauteur) et
+   seule la liste des cartes défile. Sinon, amener un élément à l'écran pouvait
+   faire glisser toute la fenêtre vers le haut (titre et réglages hors de vue). */
+.ankibridge-main{overscroll-behavior:contain;position:relative}
+/* position:relative : les libellés invisibles pour lecteurs d'écran (absolus) sont
+   rattachés à la zone des cartes et ne débordent plus de l'écran. */
+.ankibridge-dialog{position:relative}
 .ankibridge-dialog{background:#fff;color:#111827;border-radius:14px;width:min(860px,100%);
   color-scheme:light;
   box-shadow:0 20px 50px rgba(0,0,0,.35);font:14px/1.5 system-ui;display:flex;flex-direction:column;max-height:92vh}
@@ -12,10 +19,30 @@
   padding:14px 16px;border-bottom:1px solid #e5e7eb}
 .ankibridge-head h2{margin:0;font-size:16px}
 .ankibridge-close{background:none;border:0;font-size:22px;line-height:1;cursor:pointer;color:#6b7280;padding:0 6px}
-.ankibridge-main{padding:12px 16px;overflow:auto}
+/* Haut fixe (paquet, sélection, légende) et liste des cartes seule à défiler.
+   min-height:0 permet à la liste de rétrécir et de défiler dans la colonne flex ;
+   le haut passe au-dessus (z-index) pour que la liste des paquets recouvre les cartes. */
+.ankibridge-top{flex:none;position:relative;z-index:3;padding:12px 16px 4px;border-bottom:1px solid #e5e7eb;background:inherit;border-radius:0}
+.ankibridge-top .ankibridge-legend{margin-bottom:6px}
+.ankibridge-main{flex:1 1 auto;min-height:0;padding:12px 16px;overflow:auto}
 .ankibridge-control{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .ankibridge-decklabel{font-weight:600;padding-top:7px}
 .ankibridge-combo{position:relative;flex:1 1 320px;min-width:240px}
+.ankibridge-deckparent{color:#6b7280;font-weight:400}
+.ankibridge-deckleaf{font-weight:600}
+.ankibridge-deckoption[aria-selected="true"]::before{content:"✓ ";color:#15803d}
+.ankibridge-newdeck{margin-top:8px;padding:10px 12px;border:1px solid #93c5fd;border-radius:10px;background:#eff6ff}
+.ankibridge-newdecklabel{display:block;font-size:12px;font-weight:600;color:#1e3a8a}
+.ankibridge-newdeckname{display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:7px 10px;border:1px solid #93c5fd;
+  border-radius:8px;font:14px system-ui;background:#fff;color:#111827}
+.ankibridge-newdeckinfo{margin:6px 0 0;font-size:12px;color:#1e3a8a}
+.ankibridge-newdeckinfo.bad{color:#9a3412}
+.ankibridge-newdeckactions{display:flex;gap:8px;margin-top:8px}
+.ankibridge-newdeckok{background:#166534;color:#fff;border:0;border-radius:8px;padding:7px 12px;font:600 13px system-ui;cursor:pointer}
+.ankibridge-newdeckok:disabled{background:#9ca3af;cursor:not-allowed}
+.ankibridge-newdeckcancel{background:#e5e7eb;color:#111827;border:0;border-radius:8px;padding:7px 12px;font:600 13px system-ui;cursor:pointer}
+.ankibridge-headtools{display:flex;align-items:center;gap:8px}
+.ankibridge-themebtn{background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:4px 10px;font:600 12px system-ui;color:#374151;cursor:pointer}
 .ankibridge-deckinput{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}
 .ankibridge-decklist{position:absolute;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;
   background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 24px rgba(0,0,0,.18);
@@ -23,8 +50,11 @@
 .ankibridge-decklist[hidden]{display:none}
 .ankibridge-deckoption{padding:6px 8px;border-radius:6px;cursor:pointer}
 .ankibridge-deckoption:hover,.ankibridge-deckoption.active{background:#eef2ff}
-.ankibridge-deckoption[aria-selected="true"]{font-weight:600}
 .ankibridge-deckempty,.ankibridge-deckmore{padding:6px 8px;color:#6b7280;font-size:13px}
+.ankibridge-deckcreate{padding:6px 8px;border-radius:6px;cursor:pointer;color:#1e3a8a;font-weight:600;
+  border-top:1px solid #e5e7eb;margin-top:2px}
+.ankibridge-deckcreate:hover,.ankibridge-deckcreate.active{background:#eef2ff}
+.ankibridge-deckinvalid{padding:6px 8px;color:#9a3412;font-size:13px;border-top:1px solid #e5e7eb}
 .ankibridge-review{background:#eef2ff;border:1px solid #c7d2fe;color:#1e3a8a;border-radius:8px;padding:7px 12px;font:600 12px system-ui;cursor:pointer}
 .ankibridge-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
 .ankibridge-bulk button{background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font:600 12px system-ui;cursor:pointer}
@@ -62,8 +92,66 @@
 .ankibridge-legenditem{display:inline-flex;align-items:center;gap:6px}
 .ankibridge-legend .ankibridge-dot{margin-top:0}
 .ankibridge-card label{display:block;margin-top:8px;font-size:12px;color:#374151;font-weight:600}
-.ankibridge-card textarea{width:100%;box-sizing:border-box;min-height:52px;margin-top:3px;padding:6px 8px;
+.ankibridge-card textarea{width:100%;box-sizing:border-box;min-height:120px;margin-top:3px;padding:6px 8px;
   border:1px solid #cbd5e1;border-radius:8px;font:13px/1.4 system-ui;resize:vertical}
+/* Un élément masqué l'est toujours, même si une règle lui donne un display. */
+.ankibridge-dialog [hidden]{display:none!important}
+/* Champ de carte : en-tête (nom + « Texte brut »), éditeur visuel, texte brut. */
+.ankibridge-fieldwrap{margin-top:10px}
+.ankibridge-fieldhead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ankibridge-fieldname{font-size:12px;font-weight:600;color:#374151}
+.ankibridge-rawtoggle{background:none;border:0;color:#1d4ed8;font:600 12px system-ui;cursor:pointer;text-decoration:underline;padding:2px 4px}
+.ankibridge-rich{margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;background:#fff}
+.ankibridge-rich:focus-within{border-color:#1d4ed8;box-shadow:0 0 0 2px rgba(29,78,216,.15)}
+.ankibridge-toolbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:5px 6px;border-bottom:1px solid #e5e7eb;
+  background:#f8fafc;border-radius:8px 8px 0 0}
+.ankibridge-tool{min-width:30px;height:28px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:none;
+  color:#1f2937;font:600 13px system-ui;cursor:pointer}
+.ankibridge-tool:hover{background:#e5e7eb}
+.ankibridge-tool[aria-pressed="true"]{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}
+.ankibridge-tool.bold{font-weight:800}
+.ankibridge-tool.italic{font-style:italic;font-family:Georgia,serif}
+.ankibridge-holeadd{margin-left:auto;height:28px;padding:0 10px;border:1px solid #93c5fd;border-radius:6px;background:#eff6ff;
+  color:#1e3a8a;font:600 12px system-ui;cursor:pointer}
+.ankibridge-richedit{min-height:110px;max-height:60vh;overflow:auto;padding:10px 12px;outline:none;
+  font:14px/1.7 system-ui;color:#111827;white-space:pre-wrap;word-break:break-word}
+.ankibridge-richedit ul,.ankibridge-richedit ol{margin:4px 0;padding-left:24px;white-space:normal}
+.ankibridge-richedit code{background:#f1f5f9;border-radius:4px;padding:0 3px;font:12px ui-monospace,Menlo,monospace}
+.ankibridge-rich .ankibridge-holemsg{display:block;padding:0 12px 6px}
+.ankibridge-rich .ankibridge-holemsg:empty{display:none}
+.ankibridge-hole{display:inline-flex;align-items:center;gap:3px;margin:0 2px;padding:1px 3px 1px 2px;border-radius:7px;
+  background:#dbeafe;border:1px solid #93c5fd;vertical-align:baseline;line-height:1.4}
+.ankibridge-holenum{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:10px;
+  border:0;background:#1d4ed8;color:#fff;font:700 11px system-ui;padding:0 5px;cursor:pointer}
+.ankibridge-holenum:hover,.ankibridge-holenum[aria-expanded="true"]{box-shadow:0 0 0 3px rgba(29,78,216,.3)}
+.ankibridge-holenum:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.ankibridge-hole{position:relative}
+.ankibridge-holemenu{position:fixed;left:0;top:0;z-index:2147483601;min-width:200px;max-width:260px;padding:4px;border:1px solid #cbd5e1;
+  border-radius:8px;background:#fff;box-shadow:0 10px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:2px;line-height:1.4;white-space:normal}
+.ankibridge-holemenuitem{text-align:left;border:0;background:none;padding:6px 8px;border-radius:6px;font:600 13px system-ui;color:#111827;cursor:pointer}
+.ankibridge-holemenuitem:hover,.ankibridge-holemenuitem:focus-visible{background:#eef2ff;outline:none}
+.ankibridge-holemenuitem.current{color:#1d4ed8}
+.ankibridge-holemenuhint{margin:4px 8px 2px;font:12px system-ui;color:#6b7280}
+.ankibridge-holeinput{box-sizing:content-box;border:1px solid #93c5fd;border-radius:5px;background:#fff;color:#1e3a8a;
+  font:600 14px system-ui;padding:1px 6px;min-width:3ch;max-width:100%}
+.ankibridge-holeinput.bold{font-weight:800}
+.ankibridge-holeinput.italic{font-style:italic}
+.ankibridge-holeinput.invalid{border-color:#b91c1c;background:#fef2f2}
+.ankibridge-holeinput:focus-visible{outline:2px solid #1d4ed8;outline-offset:1px}
+.ankibridge-holeremove{border:0;background:none;color:#1e3a8a;font:700 15px/1 system-ui;cursor:pointer;padding:0 3px}
+.ankibridge-holeremove:hover{color:#b91c1c}
+.ankibridge-holemsg{font-size:12px;color:#14532d}
+.ankibridge-holemsg.bad{color:#9a3412}
+/* Texte modifiable et aperçu mis en forme côte à côte (l'un sous l'autre si étroit). */
+.ankibridge-field{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start}
+.ankibridge-preview{margin-top:8px;padding:6px 10px;border:1px dashed #cbd5e1;border-radius:8px;background:#fff;
+  font:13px/1.45 system-ui;color:#111827;min-height:52px;box-sizing:border-box;word-break:break-word}
+.ankibridge-previewcap{display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:2px}
+.ankibridge-previewbody ul,.ankibridge-previewbody ol{margin:2px 0;padding-left:22px}
+.ankibridge-previewbody code{background:#f1f5f9;border-radius:4px;padding:0 3px;font:12px ui-monospace,Menlo,monospace}
+.ankibridge-cloze{background:#dbeafe;color:#1e3a8a;border-radius:4px;padding:0 3px;font-weight:600}
+.ankibridge-clozehint{font-weight:400;font-style:italic}
+@media (max-width:640px){.ankibridge-field{grid-template-columns:minmax(0,1fr)}}
 /* Le statut est porté par le point et le texte : les blocs d'explication restent
    neutres, sans fond coloré, pour ne pas coder l'état deux fois. */
 .ankibridge-notice{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px;background:#f1f5f9;color:#334155}
@@ -72,11 +160,11 @@
 .ankibridge-dupfield{margin:2px 0;font-size:12px}
 .ankibridge-dupnote{margin:6px 0 0;font-size:12px;font-style:italic}
 .ankibridge-replacerow:empty{display:none}
-.ankibridge-replacebox{margin-top:10px;padding:10px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff}
-.ankibridge-replacepick{display:flex!important;align-items:flex-start;gap:8px;font-weight:600;color:#1e3a8a}
+.ankibridge-replacebox{margin-top:8px}
+.ankibridge-replacepick{display:flex!important;align-items:center;gap:8px;font-weight:600;color:#1f2937}
 .ankibridge-replacepick input{width:16px;height:16px;flex:none;margin-top:2px}
-.ankibridge-replacehint{margin:6px 0 0;font-size:12px;color:#1e40af}
-.ankibridge-diff{margin-top:8px;padding:8px;border-radius:6px;background:#fff;border:1px dashed #93c5fd;font-size:12px}
+.ankibridge-replacehint{margin:6px 0 0;font-size:12px;color:#4b5563}
+.ankibridge-diff{margin-top:6px;font-size:12px}
 .ankibridge-difftitle{margin:0 0 4px;font-weight:600}
 .ankibridge-diffline{margin:2px 0;color:#7f1d1d;word-break:break-word}
 .ankibridge-diffline.after{color:#14532d}
@@ -119,3 +207,91 @@
   .ankibridge-parsenote {color:#fbbf24}
   .ankibridge-rejected {background:#2a2112; border-color:#7c5a1e; color:#fde68a}
 }
+
+/* ---------------------------------------------------------------------------
+   Mode sombre : classe posée sur la fenêtre selon le réglage (automatique =
+   thème du système, ou clair / sombre imposé). Les points de statut gardent
+   leurs couleurs ; la case d'import reste dessinée sur fond clair (lisible).
+--------------------------------------------------------------------------- */
+.ankibridge-dark .ankibridge-dialog{background:#161a20;color:#e6eaf0;color-scheme:dark}
+.ankibridge-dark .ankibridge-head,.ankibridge-dark .ankibridge-top,.ankibridge-dark .ankibridge-foot,.ankibridge-dark .ankibridge-toolbar{border-color:#2b323c}
+.ankibridge-dark .ankibridge-close,.ankibridge-dark .ankibridge-fieldname,.ankibridge-dark .ankibridge-card label,
+.ankibridge-dark .ankibridge-count,.ankibridge-dark .ankibridge-legend,
+.ankibridge-dark .ankibridge-msg,.ankibridge-dark .ankibridge-previewcap,.ankibridge-dark .ankibridge-deckparent{color:#a8b2bd}
+.ankibridge-dark .ankibridge-deckinput,.ankibridge-dark .ankibridge-card textarea,
+.ankibridge-dark .ankibridge-newdeckname{background:#1b2027;border-color:#39414c;color:#e6eaf0}
+.ankibridge-dark .ankibridge-decklist{background:#1b2027;border-color:#39414c}
+.ankibridge-dark .ankibridge-deckoption:hover,.ankibridge-dark .ankibridge-deckoption.active,
+.ankibridge-dark .ankibridge-deckcreate:hover,.ankibridge-dark .ankibridge-deckcreate.active{background:#273042}
+.ankibridge-dark .ankibridge-deckcreate{color:#93c5fd;border-color:#2b323c}
+.ankibridge-dark .ankibridge-deckempty,.ankibridge-dark .ankibridge-deckmore{color:#a8b2bd}
+.ankibridge-dark .ankibridge-deckinvalid{color:#fdba74;border-color:#2b323c}
+.ankibridge-dark .ankibridge-review,.ankibridge-dark .ankibridge-holeadd{background:#1e293b;border-color:#3b4a6b;color:#bfdbfe}
+.ankibridge-dark .ankibridge-bulk button,.ankibridge-dark .ankibridge-themebtn,.ankibridge-dark .ankibridge-cancel,
+.ankibridge-dark .ankibridge-newdeckcancel{background:#252b34;border-color:#39414c;color:#e6eaf0}
+.ankibridge-dark .ankibridge-row{background:#1b2027;border-color:#2b323c}
+.ankibridge-dark .ankibridge-notice{background:#222a35;color:#d1d9e2}
+.ankibridge-dark .ankibridge-dup{background:#1b2027;color:#d1d9e2}
+.ankibridge-dark .ankibridge-newdeck{background:#172033;border-color:#3b4a6b}
+.ankibridge-dark .ankibridge-replacepick{color:#e6eaf0}
+.ankibridge-dark .ankibridge-replacehint{color:#a8b2bd}
+.ankibridge-dark .ankibridge-newdecklabel,
+.ankibridge-dark .ankibridge-newdeckinfo{color:#bfdbfe}
+.ankibridge-dark .ankibridge-newdeckinfo.bad{color:#fdba74}
+.ankibridge-dark .ankibridge-preview{background:#1b2027;border-color:#3b4a6b;color:#e6eaf0}
+.ankibridge-dark .ankibridge-diffline{color:#fca5a5}
+.ankibridge-dark .ankibridge-diffline.after{color:#86efac}
+.ankibridge-dark .ankibridge-confirm{background:#2a1515;border-color:#7f1d1d}
+.ankibridge-dark .ankibridge-confirm h3{color:#fecaca}
+.ankibridge-dark .ankibridge-confirm p{color:#fde2e2}
+.ankibridge-dark .ankibridge-rich{background:#1b2027;border-color:#39414c}
+.ankibridge-dark .ankibridge-toolbar{background:#20262f}
+.ankibridge-dark .ankibridge-tool{color:#e6eaf0}
+.ankibridge-dark .ankibridge-tool:hover{background:#2b323c}
+.ankibridge-dark .ankibridge-tool[aria-pressed="true"]{background:#1e3a8a;border-color:#3b82f6;color:#fff}
+.ankibridge-dark .ankibridge-richedit{color:#e6eaf0}
+.ankibridge-dark .ankibridge-richedit code,.ankibridge-dark .ankibridge-previewbody code{background:#252b34}
+.ankibridge-dark .ankibridge-hole{background:#1e3a8a;border-color:#3b82f6}
+.ankibridge-dark .ankibridge-holeinput{background:#0f172a;border-color:#3b82f6;color:#dbeafe}
+.ankibridge-dark .ankibridge-holeremove{color:#bfdbfe}
+.ankibridge-dark .ankibridge-cloze{background:#1e3a8a;color:#dbeafe}
+.ankibridge-dark .ankibridge-holemsg{color:#86efac}
+.ankibridge-dark .ankibridge-holemsg.bad{color:#fdba74}
+.ankibridge-dark .ankibridge-rawtoggle{color:#93c5fd}
+.ankibridge-dark .ankibridge-rejected{background:#2a2112;border-color:#7c5a1e;color:#fde68a}
+/* Messages courts : rien à signaler = rien d'affiché ; le détail est replié. */
+.ankibridge-notice:empty{display:none}
+.ankibridge-dupdetails,.ankibridge-diffdetails{margin-top:4px}
+.ankibridge-dupdetails summary,.ankibridge-diffdetails summary{cursor:pointer;font-size:12px;color:#1d4ed8;font-weight:600}
+.ankibridge-dark .ankibridge-dupdetails summary,.ankibridge-dark .ankibridge-diffdetails summary{color:#93c5fd}
+.ankibridge-dark .ankibridge-holemenu{background:#1b2027;border-color:#39414c}
+.ankibridge-dark .ankibridge-holemenuitem{color:#e6eaf0}
+.ankibridge-dark .ankibridge-holemenuitem:hover,.ankibridge-dark .ankibridge-holemenuitem:focus-visible{background:#273042}
+.ankibridge-dark .ankibridge-holemenuitem.current{color:#93c5fd}
+.ankibridge-dark .ankibridge-holemenuhint{color:#a8b2bd}
+/* ---------------------------------------------------------------------------
+   Retour visuel des boutons : survol, enfoncement au clic, état désactivé lisible,
+   et état « en cours » (roue + libellé) pour les actions qui prennent du temps.
+--------------------------------------------------------------------------- */
+.ankibridge-dialog button{transition:background-color .12s,box-shadow .12s,transform .06s,opacity .12s}
+.ankibridge-dialog button:not(:disabled):active{transform:translateY(1px) scale(.97)}
+.ankibridge-dialog button:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.ankibridge-review:hover:not(:disabled){background:#e0e7ff;border-color:#a5b4fc}
+.ankibridge-bulk button:hover:not(:disabled),.ankibridge-themebtn:hover{background:#e5e7eb}
+.ankibridge-action:hover:not(:disabled){background:#14532d}
+.ankibridge-replace:hover:not(:disabled){background:#1e40af}
+.ankibridge-newdeckok:hover:not(:disabled){background:#14532d}
+.ankibridge-review:disabled,.ankibridge-bulk button:disabled{opacity:.55;cursor:not-allowed}
+.ankibridge-dialog button.is-busy{cursor:progress;opacity:1}
+.ankibridge-action.is-busy,.ankibridge-newdeckok.is-busy{background:#166534}
+.ankibridge-replace.is-busy{background:#1d4ed8}
+.ankibridge-dialog button.is-busy::before{content:"";display:inline-block;width:11px;height:11px;margin-right:7px;vertical-align:-1px;
+  border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:ankibridge-spin .7s linear infinite}
+@keyframes ankibridge-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  .ankibridge-dialog button.is-busy::before{animation-duration:2.5s}
+  .ankibridge-dialog button:not(:disabled):active{transform:none}
+}
+.ankibridge-dark .ankibridge-review:hover:not(:disabled){background:#27365a;border-color:#4b5f8f}
+.ankibridge-dark .ankibridge-bulk button:hover:not(:disabled),.ankibridge-dark .ankibridge-themebtn:hover{background:#2f3742}
+.ankibridge-dark .ankibridge-dialog button:focus-visible{outline-color:#93c5fd}

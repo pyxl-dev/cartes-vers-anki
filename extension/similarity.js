@@ -2,8 +2,10 @@
 (function (root) {
   'use strict';
   const stop = new Set('a au aux de des du le la les un une et ou en dans sur sous par pour avec sans qui que quel quelle quels quelles est sont ce cette ces qu qui comment combien pourquoi ou où on se ses leurs il elle elles ils d l s c ne pas plus moins chez entre indique citer donne nomme vrai faux role rôle fait'.split(' '));
+  // La mise en forme (**gras**, Na^+^, H~2~O, listes) est retirée sans espace
+  // ajouté : « H~2~O » doit valoir « H2O », comme la note Anki <sub> une fois lue.
   function normalize(s) {
-    return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\{\{c\d+::(.*?)(?:::.*?)?\}\}/g, '$1')
+    return root.AnkiShared.stripMarkdown(String(s || '')).replace(/<[^>]*>/g, ' ').replace(/\{\{c\d+::(.*?)(?:::.*?)?\}\}/g, '$1')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
       .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
