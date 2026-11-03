@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cartes vers Anki">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f9fb0"/>
+      <stop offset="1" stop-color="#1b3f8f"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".08"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- carte du fond -->
+  <rect x="176" y="92" width="228" height="288" rx="34" transform="rotate(10 290 236)" fill="none" stroke="#fff" stroke-width="20" opacity=".55"/>
+  <!-- carte du dessus -->
+  <rect x="108" y="132" width="228" height="288" rx="34" transform="rotate(-6 222 276)" fill="url(#card)" stroke="#fff" stroke-width="22"/>
+  <!-- plus : ajouter la carte -->
+  <g transform="rotate(-6 222 276)" fill="#fff">
+    <rect x="203" y="214" width="38" height="124" rx="19"/>
+    <rect x="160" y="257" width="124" height="38" rx="19"/>
+  </g>
+</svg>
