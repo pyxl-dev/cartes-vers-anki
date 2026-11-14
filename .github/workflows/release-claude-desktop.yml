@@ -1,0 +1,79 @@
+# Extension Claude Desktop : construit claude/dist/cartes-vers-anki.mcpb et le
+# dépose dans la release fixe « claude-desktop ». Le lien de téléchargement ne change
+# jamais :
+#   https://github.com/pyxl-dev/cartes-vers-anki/releases/download/claude-desktop/cartes-vers-anki.mcpb
+# Publier une version : monter "version" dans claude/manifest.json ET claude/package.json,
+# fusionner sur main, puis pousser le tag claude-vX.Y.Z correspondant.
+name: Release Claude Desktop
+
+on:
+  push:
+    tags: ['claude-v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-claude-desktop
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Vérifier que le tag correspond à la version
+        id: version
+        run: |
+          manifest=$(node -p "require('./claude/manifest.json').version")
+          pkg=$(node -p "require('./claude/package.json').version")
+          tag="${GITHUB_REF_NAME#claude-v}"
+          if [ "$manifest" != "$tag" ] || [ "$pkg" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME, manifest.json $manifest, package.json $pkg : les trois doivent être identiques."
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Tests des modules partagés
+        run: node tests/test.cjs
+
+      - name: Construire le .mcpb
+        working-directory: claude
+        run: |
+          npm install --no-audit --no-fund
+          node build.mjs
+
+      - name: Le serveur emballé démarre et répond en MCP
+        run: |
+          mkdir -p /tmp/unpacked && cd /tmp/unpacked && unzip -q "$GITHUB_WORKSPACE/claude/dist/cartes-vers-anki.mcpb"
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | (cat; sleep 3) | timeout 20 node server/index.mjs > /tmp/out.jsonl || true
+          n=$(node -e "const l=require('fs').readFileSync('/tmp/out.jsonl','utf8').trim().split('\n').map(JSON.parse);console.log(l.find(m=>m.id===2).result.tools.length)")
+          echo "outils : $n"
+          [ "$n" = "6" ]
+
+      - name: Mettre à jour la release fixe claude-desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          notes="Extension Claude Desktop, version $VERSION.
+
+          Installer ou mettre à jour : télécharger cartes-vers-anki.mcpb, puis dans Claude Desktop, Réglages > Extensions, glisser le fichier dans la fenêtre. Anki Desktop doit être ouvert avec le greffon AnkiConnect (code 2055492159).
+
+          Détails : claude/README.md"
+          if gh release view claude-desktop > /dev/null 2>&1; then
+            gh release upload claude-desktop claude/dist/cartes-vers-anki.mcpb --clobber
+            gh release edit claude-desktop --title "Claude Desktop $VERSION" --notes "$notes" --latest=false
+          else
+            gh release create claude-desktop claude/dist/cartes-vers-anki.mcpb \
+              --target "$GITHUB_SHA" --title "Claude Desktop $VERSION" --notes "$notes" --latest=false
+          fi
