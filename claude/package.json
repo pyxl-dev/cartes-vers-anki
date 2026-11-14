@@ -1,0 +1,18 @@
+{
+  "name": "cartes-vers-anki-claude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Extension Claude Desktop : ajoute des cartes Anki depuis une conversation, via AnkiConnect en local.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

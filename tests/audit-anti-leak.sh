@@ -27,7 +27,7 @@ PATTERNS="${SECRETS}|${PATHS}"
 if [ -n "$EXTRA_PATTERNS" ]; then PATTERNS="${PATTERNS}|${EXTRA_PATTERNS}"; fi
 
 echo "=== 1. ARBRE DE TRAVAIL ==="
-if grep -rInE "$PATTERNS" --exclude-dir=.git . ; then
+if grep -rInE "$PATTERNS" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist . ; then
   echo "  ^^ MOTIFS SENSIBLES TROUVÉS"; FAIL=1
 else echo "  OK : aucun motif sensible"; fi
 
@@ -39,7 +39,7 @@ else echo "  OK : index propre"; fi
 
 echo
 echo "=== 3. ADRESSES E-MAIL ==="
-if grep -rIoE "$EMAILS" --exclude-dir=.git . ; then
+if grep -rIoE "$EMAILS" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist . ; then
   echo "  ^^ vérifier : aucune adresse personnelle ne doit être publiée"; FAIL=1
 else echo "  OK : aucune adresse e-mail"; fi
 
