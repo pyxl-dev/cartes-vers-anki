@@ -2911,6 +2911,8 @@ function formatTests() {
     const [r] = Sim.analyze([{ type: 'basic', front: 'Rôle de H~2~O et **Na^+^** dans la cellule ?', back: 'x' }], existing, [true]);
     assert.equal(r.kind, 'similar');
     assert.equal(r.matches[0].score, 1);
+    // Ligatures : « nœud », « Œdème » ne doivent pas être coupés en « n ud », « deme ».
+    assert.deepEqual([...Sim.tokens('Rôle du nœud sinusal, Œdème')], ['noeud', 'sinusal', 'oedeme']);
   });
   t('aperçu : DOM sûr (createElement / textContent), jamais de HTML interprété', () => {
     const doc = { createElement: tag => new El(tag), createTextNode: x => new El('#text', {}, x) };

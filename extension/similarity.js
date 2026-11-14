@@ -6,7 +6,7 @@
   // ajouté : « H~2~O » doit valoir « H2O », comme la note Anki <sub> une fois lue.
   function normalize(s) {
     return root.AnkiShared.stripMarkdown(String(s || '')).replace(/<[^>]*>/g, ' ').replace(/\{\{c\d+::(.*?)(?:::.*?)?\}\}/g, '$1')
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/œ/g,'oe').replace(/æ/g,'ae')
       .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
   function tokens(s) {

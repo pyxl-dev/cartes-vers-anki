@@ -1,0 +1,47 @@
+{
+  "manifest_version": "0.3",
+  "name": "cartes-vers-anki",
+  "display_name": "Cartes vers Anki",
+  "version": "0.1.0",
+  "description": "Ajoute dans Anki les cartes créées avec Claude, avec détection des doublons. Tout reste sur ton ordinateur.",
+  "long_description": "Claude rédige des cartes de révision à partir de ton cours, te les montre, vérifie lesquelles existent déjà dans ta collection (doublons exacts et formulations proches), puis les ajoute dans le paquet de ton choix après ton accord. Anki Desktop doit être ouvert avec le greffon AnkiConnect (code 2055492159). Aucun serveur, aucun compte : l'extension ne parle qu'à AnkiConnect sur 127.0.0.1. Elle n'efface et ne modifie jamais une note existante.",
+  "author": {"name": "pyxl-dev", "url": "https://github.com/pyxl-dev"},
+  "repository": {"type": "git", "url": "https://github.com/pyxl-dev/cartes-vers-anki"},
+  "homepage": "https://github.com/pyxl-dev/cartes-vers-anki",
+  "license": "MIT",
+  "icon": "icon.png",
+  "keywords": ["anki", "flashcards", "révisions", "ankiconnect"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.mjs"],
+      "env": {"ANKI_PORT": "${user_config.anki_port}"}
+    }
+  },
+  "user_config": {
+    "anki_port": {
+      "type": "string",
+      "title": "Port AnkiConnect",
+      "description": "Laisse « auto » : 8765 puis 8766 sont essayés. Ne change que si tu as réglé un autre port dans AnkiConnect.",
+      "default": "auto",
+      "required": false
+    }
+  },
+  "tools": [
+    {"name": "anki_status", "description": "Vérifie qu'Anki est ouvert et joignable."},
+    {"name": "list_decks", "description": "Liste tes paquets Anki."},
+    {"name": "check_cards", "description": "Repère les cartes déjà présentes ou proches, sans rien écrire."},
+    {"name": "add_cards", "description": "Ajoute les cartes validées dans un paquet."},
+    {"name": "create_deck", "description": "Crée un paquet."},
+    {"name": "search_notes", "description": "Cherche dans tes cartes existantes."}
+  ],
+  "prompts": [
+    {"name": "cartes_depuis_cours", "description": "Créer des cartes Anki depuis un cours.", "arguments": ["nombre"], "text": "Crée ${arguments.nombre} cartes Anki à partir du cours fourni, montre-les, vérifie les doublons, puis ajoute-les après mon accord."}
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {"node": ">=18.0.0"}
+  }
+}
